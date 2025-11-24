@@ -11,6 +11,7 @@ from datetime import timedelta, datetime
 import pandas as pd
 import PyPDF2
 import streamlit as st
+import concurrent.futures
 
 load_dotenv()
 API_KEY_GEMINI = os.getenv("GOOGLE_API_KEY")
@@ -167,14 +168,36 @@ def obter_modelo_ativo():
         return 'gemini-flash-latest'
     except: return 'gemini-flash-latest'
 
-def consultar_ia(prompt):
-    if API_KEY_GEMINI:
-        try:
-            genai.configure(api_key=API_KEY_GEMINI)
-            model = genai.GenerativeModel('gemini-flash-latest') 
-            return model.generate_content(prompt).text
-        except Exception as e: return f"Erro IA: {str(e)}"
-    else: return "⚠️ Sem Chave API configurada no secrets.toml"
+def consultar_ia(prompt, timeout=30):
+    """
+    Consulta a IA com proteção de timeout e tratamento de erros.
+    """
+    if not API_KEY_GEMINI:
+        return "⚠️ Sem Chave API configurada no secrets.toml"
+
+    try:
+        genai.configure(api_key=API_KEY_GEMINI)
+        model = genai.GenerativeModel('gemini-flash-latest')
+        
+        # Execução com timeout usando ThreadPoolExecutor
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(model.generate_content, prompt)
+            try:
+                response = future.result(timeout=timeout)
+                return response.text
+            except concurrent.futures.TimeoutError:
+                return "⏱️ **Tempo limite excedido**: A IA está demorando demais para responder. Tente novamente com um texto menor."
+                
+    except Exception as e:
+        error_msg = str(e).lower()
+        if "quota" in error_msg or "limit" in error_msg:
+            return "🚫 **Limite de uso atingido**: O limite gratuito da API do Google Gemini foi atingido por hoje."
+        elif "network" in error_msg or "connection" in error_msg:
+            return "🌐 **Erro de conexão**: Verifique sua internet."
+        elif "authentication" in error_msg or "api key" in error_msg:
+            return "🔑 **Erro de autenticação**: Verifique sua chave API."
+        else:
+            return f"❌ **Erro inesperado**: {str(e)[:100]}"
 
 def ler_pdf(file):
     txt = ""
@@ -185,6 +208,13 @@ def ler_pdf(file):
     return txt
 
 def criar_doc(tipo, dados):
+    # Validação de campos obrigatórios para documentos finais
+    if tipo in ['Procuracao', 'Contrato', 'Hipossuficiencia']:
+        campos_obrigatorios = ['nome', 'cpf_cnpj', 'endereco', 'numero_casa', 'bairro', 'cidade', 'estado', 'cep']
+        faltantes = [c for c in campos_obrigatorios if not dados.get(c)]
+        if faltantes:
+            raise ValueError(f"Faltam dados: {', '.join(faltantes)}")
+
     doc = Document(); style = doc.styles['Normal']; style.font.name = 'Arial'; style.font.size = Pt(11)
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER; run = p.add_run("SHEILA LOPES\\nADVOGADA"); run.bold = True
     doc.add_paragraph("\\n")

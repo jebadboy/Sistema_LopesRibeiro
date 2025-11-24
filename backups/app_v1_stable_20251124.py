@@ -9,34 +9,6 @@ from streamlit_calendar import calendar
 
 st.set_page_config(page_title="Lopes & Ribeiro System", page_icon="⚖️", layout="wide")
 
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@400;600&display=swap');
-    .stApp { background: linear-gradient(135deg, #FAFAF8 0%, #F5F5F0 100%); color: #2C2C2C; font-family: 'Inter', sans-serif; }
-    section[data-testid="stSidebar"] { background-color: #FFFFFF; border-right: 2px solid #D4AF37; box-shadow: 2px 0 10px rgba(0,0,0,0.05); }
-    h1 { color: #B8860B !important; font-family: 'Playfair Display', serif; border-bottom: 3px solid #D4AF37; padding-bottom: 0.5rem; }
-    h2, h3 { color: #C19A2B !important; font-family: 'Playfair Display', serif; }
-    .stTextInput > div > div > input, .stNumberInput > div > div > input, .stDateInput > div > div > input, .stTextArea > div > div > textarea {
-        background-color: #FFFFFF; border: 1.5px solid #E0E0E0; border-radius: 6px; transition: all 0.3s ease;
-    }
-    .stTextInput > div > div > input:focus, .stNumberInput > div > div > input:focus, .stDateInput > div > div > input:focus, .stTextArea > div > div > textarea:focus {
-        border-color: #D4AF37 !important; box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.1);
-    }
-    .stTextInput label, .stNumberInput label, .stSelectbox label, .stDateInput label, .stTextArea label { color: #8B7355 !important; font-weight: 600 !important; }
-    .stButton > button {
-        background: linear-gradient(135deg, #D4AF37 0%, #C19A2B 100%); color: #FFFFFF; font-weight: 700; border-radius: 6px;
-        box-shadow: 0 4px 6px rgba(212, 175, 55, 0.2); text-transform: uppercase;
-    }
-    .stButton > button:hover { background: linear-gradient(135deg, #C19A2B 0%, #B8860B 100%); transform: translateY(-2px); }
-    div[data-testid="stMetric"] { background-color: #FFFFFF; padding: 1.2rem; border-radius: 10px; border-left: 5px solid #D4AF37; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.06); }
-    .stTabs [data-baseweb="tab"] { background-color: #F5F5F5; border-radius: 8px 8px 0 0; font-weight: 500; }
-    .stTabs [aria-selected="true"] { background: linear-gradient(135deg, #D4AF37 0%, #C19A2B 100%); color: #FFFFFF !important; font-weight: 700; }
-    ::-webkit-scrollbar { width: 10px; }
-    ::-webkit-scrollbar-track { background: #F5F5F5; }
-    ::-webkit-scrollbar-thumb { background: linear-gradient(135deg, #D4AF37 0%, #C19A2B 100%); border-radius: 10px; }
-</style>
-""", unsafe_allow_html=True)
-
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
