@@ -1,0 +1,36 @@
+# Logs do sistema
+sistema_lopes_ribeiro.log
+*.log
+
+# Backups automáticos
+backups/
+*.db-shm
+*.db-wal
+
+# Secrets e configurações sensíveis
+.streamlit/secrets.toml
+
+# Cache do Streamlit
+.streamlit/cache/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
