@@ -235,7 +235,7 @@ def criar_doc(tipo, dados):
         nome_cliente = dados.get('cliente_nome', '')
         texto = f"Recebi de {nome_cliente}, a quantia de {val}, referente a {desc}.\\n\\nPor ser verdade, firmo o presente."
     else:
-        t_doc = "PROCURAÇÃO" if tipo=="Procuracao" else "CONTRATO" if tipo==" Contrato" else "HIPOSSUFICIÊNCIA"
+        t_doc = "PROCURAÇÃO" if tipo=="Procuracao" else "CONTRATO" if tipo=="Contrato" else "HIPOSSUFICIÊNCIA"
         doc.add_heading(t_doc, level=1).alignment = WD_ALIGN_PARAGRAPH.CENTER
         end_txt = f"{dados['endereco']}, {dados['numero_casa']}, {dados['complemento']}, {dados['bairro']}, {dados['cidade']}-{dados['estado']}, CEP {dados['cep']}"
         if tipo == "Contrato":
