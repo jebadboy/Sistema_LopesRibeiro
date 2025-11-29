@@ -336,16 +336,24 @@ def cpf_existe(cpf):
 
 def ver_inadimplencia(nome):
     """Verifica inadimplência de forma segura (sem SQL Injection)."""
-    with get_connection() as conn:
-        hoje = datetime.now().strftime("%Y-%m-%d")
-        query = "SELECT * FROM financeiro WHERE descricao LIKE ? AND status_pagamento = 'Pendente' AND vencimento < ? AND tipo = 'Entrada'"
-        df = pd.read_sql_query(query, conn, params=(f'%{nome}%', hoje))
-        return "INADIMPLENTE" if not df.empty else "Adimplente"
+    try:
+        with get_connection() as conn:
+            hoje = datetime.now().strftime("%Y-%m-%d")
+            query = "SELECT * FROM financeiro WHERE descricao LIKE ? AND status_pagamento = 'Pendente' AND vencimento < ? AND tipo = 'Entrada'"
+            df = pd.read_sql_query(query, conn, params=(f'%{nome}%', hoje))
+            return "INADIMPLENTE" if not df.empty else "Adimplente"
+    except Exception as e:
+        logger.error(f"Erro ao verificar inadimplência para {nome}: {e}")
+        return "Erro ao verificar"  # Mensagem de erro amigável
 
 def get_historico(id_processo):
     """Busca histórico de andamentos de um processo."""
-    with get_connection() as conn:
-        return pd.read_sql("SELECT data, descricao, responsavel FROM andamentos WHERE id_processo=? ORDER BY data DESC", conn, params=(id_processo,))
+    try:
+        with get_connection() as conn:
+            return pd.read_sql("SELECT data, descricao, responsavel FROM andamentos WHERE id_processo=? ORDER BY data DESC", conn, params=(id_processo,))
+    except Exception as e:
+        logger.error(f"Erro ao buscar histórico do processo {id_processo}: {e}")
+        return pd.DataFrame(columns=['data', 'descricao', 'responsavel'])  # DataFrame vazio em caso de erro
 
 def kpis():
     """Calcula KPIs financeiros e operacionais."""
@@ -354,31 +362,18 @@ def kpis():
         c = pd.read_sql("SELECT * FROM clientes", conn)
         p = pd.read_sql("SELECT * FROM processos", conn)
     
-    faturamento_mes = 0
-    despesas_mes = 0
-    lucro_mes = 0
-    inadimplencia_total = 0
-    processos_ativos = len(p[p['status_processo']=='Ativo']) if not p.empty else 0
+    saldo = 0
+    receber = 0
+    num_clientes = len(c[c['status_cliente']=='ATIVO']) if not c.empty else 0
+    num_processos = len(p) if not p.empty else 0
 
     if not f.empty:
-        # Filtrar apenas mês atual
-        mes_atual = pd.Timestamp.now().month
-        ano_atual = pd.Timestamp.now().year
-        f['data_dt'] = pd.to_datetime(f['data'])
-        f_mes = f[(f['data_dt'].dt.month == mes_atual) & (f['data_dt'].dt.year == ano_atual)]
+        entradas = f[(f['tipo']=='Entrada')&(f['status_pagamento']=='Pago')]['valor'].sum()
+        saidas = f[(f['tipo']=='Saída')&(f['status_pagamento']=='Pago')]['valor'].sum()
+        saldo = entradas - saidas
+        receber = f[(f['tipo']=='Entrada')&(f['status_pagamento']=='Pendente')]['valor'].sum()
         
-        faturamento_mes = f_mes[(f_mes['tipo']=='Entrada')&(f_mes['status_pagamento']=='Pago')]['valor'].sum()
-        despesas_mes = f_mes[(f_mes['tipo']=='Saída')&(f_mes['status_pagamento']=='Pago')]['valor'].sum()
-        lucro_mes = faturamento_mes - despesas_mes
-        inadimplencia_total = f[(f['tipo']=='Entrada')&(f['status_pagamento']=='Pendente')]['valor'].sum()
-        
-    return {
-        'faturamento_mes': faturamento_mes,
-        'despesas_mes': despesas_mes,
-        'lucro_mes': lucro_mes,
-        'inadimplencia_total': inadimplencia_total,
-        'processos_ativos': processos_ativos
-    }
+    return saldo, receber, num_clientes, num_processos
 
 # --- NOVAS FUNÇÕES PARA MÓDULOS APRIMORADOS ---
 
