@@ -1,0 +1,167 @@
+/* --- DESIGN SYSTEM LOPES RIBEIRO (MODERN) --- */
+:root {
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --secondary: #64748b;
+    --success: #10b981;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --background: #f1f5f9;
+    --surface: #ffffff;
+    --text-main: #1e293b;
+    --text-light: #64748b;
+    --border: #e2e8f0;
+    --radius: 12px;
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+/* Reset e Base */
+.stApp {
+    background-color: var(--background);
+    font-family: 'Inter', sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--text-main) !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.025em;
+}
+
+/* Inputs e Formulários */
+div[data-baseweb="input"] > div, 
+div[data-baseweb="select"] > div, 
+div[data-baseweb="textarea"] > div {
+    background-color: var(--surface) !important;
+    border-radius: var(--radius) !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-main) !important;
+    box-shadow: var(--shadow-sm) !important;
+    transition: all 0.2s ease;
+}
+
+div[data-baseweb="input"] > div:focus-within,
+div[data-baseweb="select"] > div:focus-within,
+div[data-baseweb="textarea"] > div:focus-within {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15) !important;
+    transform: translateY(-1px);
+}
+
+/* Botões */
+button[kind="primary"] {
+    background-color: var(--primary) !important;
+    border: none !important;
+    border-radius: var(--radius) !important;
+    box-shadow: var(--shadow-md) !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease !important;
+}
+
+button[kind="primary"]:hover {
+    background-color: var(--primary-hover) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: var(--shadow-lg) !important;
+}
+
+button[kind="secondary"] {
+    background-color: white !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-main) !important;
+    border-radius: var(--radius) !important;
+    font-weight: 500 !important;
+}
+
+/* Cards e Containers */
+.css-card {
+    background-color: var(--surface);
+    padding: 2rem;
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+    margin-bottom: 1.5rem;
+}
+
+.metric-card {
+    background-color: var(--surface);
+    padding: 1.5rem;
+    border-radius: var(--radius);
+    border-left: 5px solid var(--primary);
+    box-shadow: var(--shadow-md);
+    transition: transform 0.2s ease;
+}
+
+.metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+.metric-value {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: var(--text-main);
+    margin-bottom: 0.5rem;
+}
+
+.metric-label {
+    font-size: 0.9rem;
+    color: var(--text-light);
+    font-weight: 500;
+}
+
+/* Tabelas */
+div[data-testid="stDataFrame"] {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow-md);
+    background-color: var(--surface);
+}
+
+div[data-testid="stDataFrame"] th {
+    background-color: #f8fafc !important;
+    color: var(--text-main) !important;
+    font-weight: 600 !important;
+}
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background-color: var(--surface);
+    border-right: 1px solid var(--border);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Status Badges */
+.status-badge {
+    padding: 0.35rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.status-success { background-color: #dcfce7; color: #166534; }
+.status-warning { background-color: #fef3c7; color: #92400e; }
+.status-danger { background-color: #fee2e2; color: #991b1b; }
+.status-neutral { background-color: #f1f5f9; color: #475569; }
+
+/* Tabs */
+div[data-baseweb="tab-list"] {
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+div[data-baseweb="tab-highlight"] {
+    background-color: var(--primary) !important;
+}
+
+button[data-baseweb="tab"] {
+    font-weight: 600 !important;
+    color: var(--text-light) !important;
+}
+
+button[data-baseweb="tab"][aria-selected="true"] {
+    color: var(--primary) !important;
+}
