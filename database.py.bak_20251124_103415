@@ -1,0 +1,771 @@
+import sqlite3
+import pandas as pd
+from datetime import datetime
+import shutil
+import os
+from contextlib import contextmanager
+import logging
+
+DB_NAME = 'dados_escritorio.db'
+TABELAS_VALIDAS = [
+    'clientes', 'financeiro', 'processos', 'andamentos',
+    'agenda', 'documentos_processo', 'parcelamentos', 'modelos_proposta'
+]
+
+# Configurar logging com encoding UTF-8 (CORREÇÃO: B2)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('sistema_lopes_ribeiro.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# --- CONEXÃO E BACKUP ---
+
+@contextmanager
+def get_connection():
+    """Gerenciador de contexto para conexão segura com o banco."""
+    conn = None
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row  # Permite acesso por nome de coluna
+        yield conn
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"Erro na conexão com banco: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
+
+def criar_backup():
+    """Cria backup manual do banco de dados."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = "backups"
+    if not os.path.exists(backup_dir):
+        os.makedirs(backup_dir)
+    backup_name = f"{backup_dir}/backup_{timestamp}.db"
+    try:
+        shutil.copy(DB_NAME, backup_name)
+        logger.info(f"Backup criado: {backup_name}")
+        return f"Backup criado: {backup_name}"
+    except Exception as e:
+        logger.error(f"Erro ao criar backup: {e}")
+        return f"Erro no backup: {e}"
+
+# Alias para compatibilidade com app.py
+backup_database = criar_backup
+
+def init_db():
+    """
+    Inicializa o banco de dados criando tabelas principais se não existirem.
+    Chamada pelo app.py na inicialização do sistema.
+    """
+    try:
+        with get_connection() as conn:
+            c = conn.cursor()
+            
+            # Tabela de Clientes
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS clientes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nome TEXT NOT NULL,
+                    cpf_cnpj TEXT,
+                    email TEXT,
+                    telefone TEXT,
+                    telefone_fixo TEXT,
+                    profissao TEXT,
+                    estado_civil TEXT,
+                    cep TEXT,
+                    endereco TEXT,
+                    numero_casa TEXT,
+                    complemento TEXT,
+                    bairro TEXT,
+                    cidade TEXT,
+                    estado TEXT,
+                    obs TEXT,
+                    status_cliente TEXT DEFAULT 'EM NEGOCIAÇÃO',
+                    link_drive TEXT,
+                    data_cadastro TEXT,
+                    proposta_valor REAL,
+                    proposta_entrada REAL,
+                    proposta_parcelas INTEGER,
+                    proposta_objeto TEXT,
+                    proposta_pagamento TEXT
+                )
+            ''')
+            
+            # Tabela de Financeiro (CORREÇÃO: C1, C3 - Schema atualizado com novas colunas)
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS financeiro (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    data TEXT,
+                    tipo TEXT CHECK(tipo IN ('Entrada', 'Saída')),
+                    categoria TEXT,
+                    descricao TEXT,
+                    valor REAL NOT NULL,
+                    responsavel TEXT,
+                    status_pagamento TEXT CHECK(status_pagamento IN ('Pago', 'Pendente')) DEFAULT 'Pendente',
+                    vencimento TEXT,
+                    id_cliente INTEGER,
+                    id_processo INTEGER,
+                    percentual_parceria REAL DEFAULT 0.0,
+                    FOREIGN KEY (id_cliente) REFERENCES clientes(id) ON DELETE SET NULL,
+                    FOREIGN KEY (id_processo) REFERENCES processos(id) ON DELETE SET NULL
+                )
+            ''')
+            
+            # Tabela de Processos
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS processos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cliente_nome TEXT,
+                    acao TEXT,
+                    proximo_prazo TEXT,
+                    responsavel TEXT,
+                    status TEXT DEFAULT 'Ativo'
+                )
+            ''')
+            
+            # Tabela de Andamentos
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS andamentos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id_processo INTEGER NOT NULL,
+                    data TEXT,
+                    descricao TEXT,
+                    responsavel TEXT,
+                    FOREIGN KEY (id_processo) REFERENCES processos(id) ON DELETE CASCADE
+                )
+            ''')
+            
+            conn.commit()
+            logger.info("Tabelas principais inicializadas com sucesso")
+            
+            # Chamar inicialização de tabelas v2 (novas funcionalidades)
+            inicializar_tabelas_v2()
+            
+    except Exception as e:
+        logger.error(f"Erro ao inicializar banco de dados: {e}")
+        raise RuntimeError(f"Falha na inicialização do banco: {e}")
+
+def migrar_adicionar_id_cliente_financeiro():
+    """
+    MIGRAÇÃO FASE 1: Adiciona coluna id_cliente à tabela financeiro.
+    Esta função deve ser executada UMA VEZ para migrar o banco existente.
+    
+    IMPORTANTE: Esta migração não preenche automaticamente os dados.
+    Os dados devem ser preenchidos manualmente ou por script separado.
+    """
+    try:
+        with get_connection() as conn:
+            c = conn.cursor()
+            
+            # Verificar se a coluna já existe
+            c.execute("PRAGMA table_info(financeiro)")
+            columns = [col[1] for col in c.fetchall()]
+            
+            if 'id_cliente' not in columns:
+                logger.info("Adicionando coluna id_cliente à tabela financeiro...")
+                
+                # Adicionar coluna id_cliente
+                c.execute("ALTER TABLE financeiro ADD COLUMN id_cliente INTEGER")
+                
+                # Adicionar colunas para relatórios mensais
+                c.execute("ALTER TABLE financeiro ADD COLUMN mes_referencia TEXT")
+                c.execute("ALTER TABLE financeiro ADD COLUMN ano_referencia INTEGER")
+                
+                # Nota: FK não pode ser adicionada via ALTER TABLE no SQLite
+                # A constraint FK deve ser criada ao criar a tabela ou recriar a tabela
+                
+                conn.commit()
+                logger.info("Coluna id_cliente adicionada com sucesso à tabela financeiro")
+                logger.warning("ATENÇÃO: Os dados existentes não foram migrados automaticamente.")
+                logger.warning("Execute o script de migração de dados ou preencha manualmente.")
+                
+                return "Migração concluída. Coluna id_cliente adicionada."
+            else:
+                logger.info("Coluna id_cliente já existe na tabela financeiro")
+                return "Migração já foi executada anteriormente."
+                
+    except Exception as e:
+        logger.error(f"Erro na migração: {e}")
+        raise RuntimeError(f"Falha na migração: {e}")
+
+# --- FUNÇÕES BÁSICAS DE CONSULTA ---
+
+def sql_get(tabela, ordem=""):
+    """Busca dados de uma tabela com validação de segurança."""
+    if tabela not in TABELAS_VALIDAS:
+        logger.error(f"Tentativa de acesso a tabela inválida: {tabela}")
+        raise ValueError(f"Tabela inválida: {tabela}. Tabelas permitidas: {TABELAS_VALIDAS}")
+    
+    try:
+        with get_connection() as conn:
+            sql = f"SELECT * FROM {tabela}"
+            if ordem: 
+                sql += f" ORDER BY {ordem}"
+            return pd.read_sql_query(sql, conn)
+    except Exception as e:
+        logger.error(f"Erro ao buscar dados da tabela {tabela}: {e}")
+        return pd.DataFrame()  # Retorna DataFrame vazio em caso de erro
+
+def sql_run(query, dados=()):
+    """Executa query SQL com tratamento robusto de exceções."""
+    try:
+        with get_connection() as conn:
+            c = conn.cursor()
+            c.execute(query, dados)
+            conn.commit()
+            logger.info(f"Query executada com sucesso: {query[:50]}...")
+    except sqlite3.IntegrityError as e:
+        logger.error(f"Erro de integridade no banco: {e}")
+        raise ValueError(f"Erro de integridade: {e}. Verifique se não há duplicação de dados.")
+    except sqlite3.OperationalError as e:
+        logger.error(f"Erro operacional no banco: {e}")
+        raise RuntimeError(f"Erro operacional no banco de dados: {e}")
+    except Exception as e:
+        logger.error(f"Erro inesperado no banco: {e}")
+        raise RuntimeError(f"Erro no banco de dados: {e}")
+
+# --- FUNÇÕES HELPER CRUD COM LOGGING AUTOMÁTICO ---
+
+def crud_insert(tabela, dados_dict, contexto=""):
+    """
+    Helper para INSERT com logging automático.
+    
+    Args:
+        tabela: Nome da tabela
+        dados_dict: Dicionário {coluna: valor}
+        contexto: Descrição da operação para log (ex: "cadastro de cliente")
+    
+    Returns:
+        ID do registro inserido ou None em caso de erro
+    """
+    colunas = ', '.join(dados_dict.keys())
+    placeholders = ', '.join(['?' for _ in dados_dict])
+    valores = tuple(dados_dict.values())
+    
+    query = f"INSERT INTO {tabela} ({colunas}) VALUES ({placeholders})"
+    
+    try:
+        with get_connection() as conn:
+            c = conn.cursor()
+            c.execute(query, valores)
+            conn.commit()
+            novo_id = c.lastrowid
+            logger.info(f"INSERT bem-sucedido em '{tabela}' (ID: {novo_id}) - {contexto}")
+            return novo_id
+    except sqlite3.IntegrityError as e:
+        logger.error(f"Erro de integridade ao inserir em '{tabela}': {e} - {contexto}")
+        raise ValueError(f"Erro de integridade: {e}")
+    except Exception as e:
+        logger.error(f"Erro ao inserir em '{tabela}': {e} -  {contexto}")
+        raise RuntimeError(f"Erro no banco de dados: {e}")
+
+def crud_update(tabela, dados_dict, condicao, valores_condicao, contexto=""):
+    """
+    Helper para UPDATE com logging automático.
+    
+    Args:
+        tabela: Nome da tabela
+        dados_dict: Dicionário {coluna: valor} para atualizar
+        condicao: String WHERE (ex: "id = ?")
+        valores_condicao: Tupla de valores para a condição
+        contexto: Descrição da operação para log
+    
+    Returns:
+        Número de linhas afetadas
+    """
+    set_clause = ', '.join([f"{col} = ?" for col in dados_dict.keys()])
+    valores = tuple(dados_dict.values()) + valores_condicao
+    
+    query = f"UPDATE {tabela} SET {set_clause} WHERE {condicao}"
+    
+    try:
+        with get_connection() as conn:
+            c = conn.cursor()
+            c.execute(query, valores)
+            conn.commit()
+            linhas_afetadas = c.rowcount
+            logger.info(f"UPDATE em '{tabela}' ({linhas_afetadas} linha(s)) - {contexto}")
+            return linhas_afetadas
+    except Exception as e:
+        logger.error(f"Erro ao atualizar '{tabela}': {e} - {contexto}")
+        raise RuntimeError(f"Erro no banco de dados: {e}")
+
+def crud_delete(tabela, condicao, valores_condicao, contexto=""):
+    """
+    Helper para DELETE com logging automático.
+    
+    Args:
+        tabela: Nome da tabela
+        condicao: String WHERE (ex: "id = ?")
+        valores_condicao: Tupla de valores para a condição
+        contexto: Descrição da operação para log
+    
+    Returns:
+        Número de linhas deletadas
+    """
+    query = f"DELETE FROM {tabela} WHERE {condicao}"
+    
+    try:
+        with get_connection() as conn:
+            c = conn.cursor()
+            c.execute(query, valores_condicao)
+            conn.commit()
+            linhas_deletadas = c.rowcount
+            logger.info(f"DELETE em '{tabela}' ({linhas_deletadas} linha(s)) - {contexto}")
+            return linhas_deletadas
+    except Exception as e:
+        logger.error(f"Erro ao deletar de '{tabela}': {e} - {contexto}")
+        raise RuntimeError(f"Erro no banco de dados: {e}")
+
+# --- FUNÇÕES ESPECÍFICAS EXISTENTES ---
+
+def cpf_existe(cpf):
+    """Verifica se CPF já está cadastrado."""
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM clientes WHERE cpf_cnpj = ?", (cpf,))
+        return c.fetchone() is not None
+
+def ver_inadimplencia(nome):
+    """Verifica inadimplência de forma segura (sem SQL Injection)."""
+    with get_connection() as conn:
+        hoje = datetime.now().strftime("%Y-%m-%d")
+        query = "SELECT * FROM financeiro WHERE descricao LIKE ? AND status_pagamento = 'Pendente' AND vencimento < ? AND tipo = 'Entrada'"
+        df = pd.read_sql_query(query, conn, params=(f'%{nome}%', hoje))
+        return "INADIMPLENTE" if not df.empty else "Adimplente"
+
+def get_historico(id_processo):
+    """Busca histórico de andamentos de um processo."""
+    with get_connection() as conn:
+        return pd.read_sql("SELECT data, descricao, responsavel FROM andamentos WHERE id_processo=? ORDER BY data DESC", conn, params=(id_processo,))
+
+def kpis():
+    """Calcula KPIs financeiros e operacionais."""
+    with get_connection() as conn:
+        f = pd.read_sql("SELECT * FROM financeiro", conn)
+        c = pd.read_sql("SELECT * FROM clientes", conn)
+        p = pd.read_sql("SELECT * FROM processos", conn)
+    
+    saldo = 0
+    receber = 0
+    num_clientes = len(c[c['status_cliente']=='ATIVO']) if not c.empty else 0
+    num_processos = len(p) if not p.empty else 0
+
+    if not f.empty:
+        entradas = f[(f['tipo']=='Entrada')&(f['status_pagamento']=='Pago')]['valor'].sum()
+        saidas = f[(f['tipo']=='Saída')&(f['status_pagamento']=='Pago')]['valor'].sum()
+        saldo = entradas - saidas
+        receber = f[(f['tipo']=='Entrada')&(f['status_pagamento']=='Pendente')]['valor'].sum()
+        
+    return saldo, receber, num_clientes, num_processos
+
+# --- NOVAS FUNÇÕES PARA MÓDULOS APRIMORADOS ---
+
+def inicializar_tabelas_v2():
+    """
+    Cria/atualiza tabelas para as novas funcionalidades.
+    Executa de forma segura, criando apenas se não existir.
+    """
+    with get_connection() as conn:
+        c = conn.cursor()
+        
+        # Tabela de Agenda (prazos, audiências, tarefas)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS agenda (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo TEXT CHECK(tipo IN ('prazo', 'audiencia', 'tarefa')),
+                titulo TEXT NOT NULL,
+                descricao TEXT,
+                data_evento TEXT,
+                responsavel TEXT,
+                id_processo INTEGER,
+                status TEXT DEFAULT 'pendente',
+                google_calendar_id TEXT,
+                cor TEXT,
+                prioridade TEXT CHECK(prioridade IN ('baixa', 'media', 'alta', 'urgente')),
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (id_processo) REFERENCES processos(id)
+            )
+        ''')
+        
+        # Tabela de Documentos do Processo
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS documentos_processo (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id_processo INTEGER NOT NULL,
+                tipo_documento TEXT CHECK(tipo_documento IN ('peticao_inicial', 'procuracao', 'sentenca', 'acordao', 'outro')),
+                nome_documento TEXT,
+                link_drive TEXT,
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (id_processo) REFERENCES processos(id)
+            )
+        ''')
+        
+        # Tabela de Parcelamentos
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS parcelamentos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id_lancamento_financeiro INTEGER NOT NULL,
+                numero_parcela INTEGER,
+                total_parcelas INTEGER,
+                valor_parcela REAL,
+                vencimento TEXT,
+                status_parcela TEXT DEFAULT 'pendente',
+                pago_em TEXT,
+                FOREIGN KEY (id_lancamento_financeiro) REFERENCES financeiro(id)
+            )
+        ''')
+        
+        # Tabela de Modelos de Proposta
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS modelos_proposta (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nome_modelo TEXT UNIQUE NOT NULL,
+                area_atuacao TEXT,
+                descricao_padrao TEXT,
+                valor_sugerido REAL,
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        conn.commit()
+        logger.info("Tabelas v2 inicializadas com sucesso")
+
+def get_agenda_eventos(filtro_tipo=None, filtro_responsavel=None, filtro_status=None):
+    """
+    Busca eventos da agenda com filtros opcionais.
+    
+    Args:
+        filtro_tipo: 'prazo', 'audiencia', 'tarefa' ou None
+        filtro_responsavel: nome do responsável ou None
+        filtro_status: 'pendente', 'concluido' ou None
+    """
+    with get_connection() as conn:
+        query = "SELECT * FROM agenda WHERE 1=1"
+        params = []
+        
+        if filtro_tipo:
+            query += " AND tipo = ?"
+            params.append(filtro_tipo)
+        if filtro_responsavel:
+            query += " AND responsavel = ?"
+            params.append(filtro_responsavel)
+        if filtro_status:
+            query += " AND status = ?"
+            params.append(filtro_status)
+        
+        query += " ORDER BY data_evento ASC"
+        
+        return pd.read_sql_query(query, conn, params=params)
+
+def get_agenda_por_processo(id_processo):
+    """Busca todos os eventos de agenda vinculados a um processo."""
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            "SELECT * FROM agenda WHERE id_processo = ? ORDER BY data_evento ASC",
+            conn,
+            params=(id_processo,)
+        )
+
+# --- FUNÇÕES PARA PROCESSOS ---
+
+def get_documentos_processo(id_processo):
+    """Busca todos os documentos vinculados a um processo."""
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            "SELECT * FROM documentos_processo WHERE id_processo = ? ORDER BY criado_em DESC",
+            conn,
+            params=(id_processo,)
+        )
+
+def get_vinculos_financeiros(id_processo):
+    """Busca todos os lançamentos financeiros vinculados a um processo."""
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            "SELECT * FROM financeiro WHERE id_processo = ? ORDER BY vencimento DESC",
+            conn,
+            params=(id_processo,)
+        )
+
+# --- FUNÇÕES PARA FINANCEIRO ---
+
+def calcular_repasse_parceria(id_processo, valor_recebido):
+    """
+    Calcula o valor de repasse para o parceiro baseado no processo.
+    
+    Args:
+        id_processo: ID do processo
+        valor_recebido: Valor que foi recebido
+    
+    Returns:
+        dict com informações do repasse ou None
+    """
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT parceiro_nome, parceiro_percentual FROM processos WHERE id = ?", (id_processo,))
+        resultado = c.fetchone()
+        
+        if resultado and resultado['parceiro_nome'] and resultado['parceiro_percentual']:
+            valor_repasse = valor_recebido * (resultado['parceiro_percentual'] / 100)
+            return {
+                'parceiro_nome': resultado['parceiro_nome'],
+                'percentual': resultado['parceiro_percentual'],
+                'valor_repasse': valor_repasse
+            }
+        return None
+
+def get_parcelamentos(id_lancamento):
+    """Busca todas as parcelas de um lançamento financeiro."""
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            "SELECT * FROM parcelamentos WHERE id_lancamento_financeiro = ? ORDER BY numero_parcela ASC",
+            conn,
+            params=(id_lancamento,)
+        )
+
+# --- FUNÇÕES PARA RELATÓRIOS ---
+
+def relatorio_inadimplencia():
+    """Gera relatório de clientes inadimplentes."""
+    with get_connection() as conn:
+        hoje = datetime.now().strftime("%Y-%m-%d")
+        query = """
+            SELECT 
+                f.descricao,
+                f.valor,
+                f.vencimento,
+                julianday(?) - julianday(f.vencimento) as dias_atraso
+            FROM financeiro f
+            WHERE f.tipo = 'Entrada'
+            AND f.status_pagamento = 'Pendente'
+            AND f.vencimento < ?
+            ORDER BY f.vencimento ASC
+        """
+        return pd.read_sql_query(query, conn, params=(hoje, hoje))
+
+def relatorio_comissoes(data_inicio=None, data_fim=None):
+    """Gera relatório de comissões de parceiros."""
+    with get_connection() as conn:
+        query = """
+            SELECT 
+                descricao,
+                valor,
+                vencimento,
+                status_pagamento
+            FROM financeiro
+            WHERE categoria = 'Comissão Parceria'
+        """
+        params = []
+        
+        if data_inicio:
+            query += " AND vencimento >= ?"
+            params.append(data_inicio)
+        if data_fim:
+            query += " AND vencimento <= ?"
+            params.append(data_fim)
+        
+        query += " ORDER BY vencimento DESC"
+        
+        return pd.read_sql_query(query, conn, params=params if params else None)
+
+def exportar_para_excel(df, nome_arquivo):
+    """
+    Exporta um DataFrame para Excel.
+    
+    Args:
+        df: DataFrame do pandas
+        nome_arquivo: Nome do arquivo (sem extensão)
+    
+    Returns:
+        Caminho do arquivo criado
+    """
+    try:
+        caminho = f"relatorios/{nome_arquivo}.xlsx"
+        os.makedirs("relatorios", exist_ok=True)
+        df.to_excel(caminho, index=False, engine='openpyxl')
+        logger.info(f"Relatório exportado: {caminho}")
+        return caminho
+    except Exception as e:
+        logger.error(f"Erro ao exportar Excel: {e}")
+        raise
+
+def exportar_backup_completo():
+    """Cria backup completo de todas as tabelas em SQLite e CSV."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_dir = f"backups/completo_{timestamp}"
+    os.makedirs(backup_dir, exist_ok=True)
+    
+    # Backup do SQLite
+    criar_backup()
+    
+    # Exportar cada tabela para CSV
+    with get_connection() as conn:
+        for tabela in TABELAS_VALIDAS:
+            try:
+                df = pd.read_sql(f"SELECT * FROM {tabela}", conn)
+                df.to_csv(f"{backup_dir}/{tabela}.csv", index=False)
+                logger.info(f"Tabela '{tabela}' exportada para CSV")
+            except Exception as e:
+                logger.error(f"Erro ao exportar tabela '{tabela}': {e}")
+    
+    return f"Backup completo criado em: {backup_dir}"
+
+# --- LÓGICA DE NEGÓCIO FASE 3 (FINANCEIRO) ---
+
+def gerar_parcelas(id_financeiro_pai, num_parcelas, valor_total, data_inicio):
+    """
+    Gera N parcelas para um lançamento financeiro.
+    
+    Args:
+        id_financeiro_pai: ID do lançamento original (Entrada/Saída)
+        num_parcelas: Número total de parcelas
+        valor_total: Valor total a ser parcelado
+        data_inicio: Data da primeira parcela (string YYYY-MM-DD)
+    """
+    # CORREÇÃO M5: Validação para evitar divisão por zero
+    if num_parcelas <= 0:
+        logger.error(f"Numero de parcelas invalido: {num_parcelas}")
+        raise ValueError("Numero de parcelas deve ser maior que zero")
+    
+    valor_parcela = round(valor_total / num_parcelas, 2)
+    # Ajuste de centavos na última parcela
+    diferenca = round(valor_total - (valor_parcela * num_parcelas), 2)
+    
+    dt_obj = datetime.strptime(data_inicio, "%Y-%m-%d")
+    
+    with get_connection() as conn:
+        c = conn.cursor()
+        for i in range(1, num_parcelas + 1):
+            vencimento = dt_obj.strftime("%Y-%m-%d")
+            valor_atual = valor_parcela
+            if i == num_parcelas:
+                valor_atual += diferenca
+            
+            c.execute('''
+                INSERT INTO parcelamentos (id_lancamento_financeiro, numero_parcela, total_parcelas, valor_parcela, vencimento, status_parcela)
+                VALUES (?, ?, ?, ?, ?, 'pendente')
+            ''', (id_financeiro_pai, i, num_parcelas, valor_atual, vencimento))
+            
+            # Incrementar mês (lógica simplificada, ideal usar dateutil.relativedelta)
+            # Aqui vamos adicionar 30 dias para simplificar
+            from datetime import timedelta
+            dt_obj += timedelta(days=30)
+        
+        conn.commit()
+        logger.info(f"Geradas {num_parcelas} parcelas para lançamento ID {id_financeiro_pai}")
+
+def processar_repasse(id_financeiro):
+    """
+    Verifica se um lançamento pago tem parceiro e gera a saída correspondente.
+    Deve ser chamado quando um status muda para 'Pago'.
+    """
+    with get_connection() as conn:
+        c = conn.cursor()
+        # Buscar dados do lançamento
+        row = c.execute("SELECT * FROM financeiro WHERE id = ?", (id_financeiro,)).fetchone()
+        
+        if row and row['status_pagamento'] == 'Pago' and row['tipo'] == 'Entrada':
+            # Verificar se tem parceiro vinculado diretamente ou via processo
+            id_parceiro = row.get('id_parceiro')
+            perc = row.get('percentual_parceria')
+            
+            # Se não tiver direto, tentar buscar do processo
+            if not id_parceiro and row.get('id_processo'):
+                proc = c.execute("SELECT parceiro_nome, parceiro_percentual FROM processos WHERE id = ?", (row['id_processo'],)).fetchone()
+                if proc and proc['parceiro_nome']:
+                    # Aqui precisaria resolver o ID do parceiro pelo nome, mas vamos assumir que o nome basta para o histórico
+                    # Para simplificar, vamos usar o nome do parceiro na descrição
+                    nome_parceiro = proc['parceiro_nome']
+                    perc = proc['parceiro_percentual']
+            else:
+                # Tentar buscar nome do parceiro se tiver ID (assumindo tabela clientes/parceiros)
+                # Por enquanto, se tiver ID, vamos usar um placeholder
+                nome_parceiro = f"Parceiro ID {id_parceiro}" if id_parceiro else None
+
+            if perc and perc > 0:
+                valor_repasse = row['valor'] * (perc / 100)
+                descricao_repasse = f"Repasse de Parceria - {row['descricao']} ({perc}%)"
+                
+                # Verificar se já existe repasse para este lançamento para evitar duplicidade
+                existe = c.execute("SELECT id FROM financeiro WHERE descricao = ? AND valor = ? AND tipo = 'Saída'", (descricao_repasse, valor_repasse)).fetchone()
+                
+                if not existe:
+                    c.execute('''
+                        INSERT INTO financeiro (data, tipo, categoria, descricao, valor, responsavel, status_pagamento, vencimento)
+                        VALUES (?, 'Saída', 'Comissão Parceria', ?, ?, ?, 'Pendente', ?)
+                    ''', (datetime.now().strftime("%Y-%m-%d"), descricao_repasse, valor_repasse, 'Sistema', datetime.now().strftime("%Y-%m-%d")))
+                    conn.commit()
+                    logger.info(f"Repasse gerado automaticamente: {descricao_repasse}")
+                    return True
+    return False
+
+def verificar_recorrencia():
+    """
+    Verifica lançamentos recorrentes e gera novos para o mês atual se necessário.
+    (Implementação futura - Placeholder)
+    """
+    pass
+
+# --- LÓGICA DE NEGÓCIO FASE 4 (COMERCIAL) ---
+
+def get_modelos_proposta():
+    """Busca todos os modelos de proposta cadastrados."""
+    with get_connection() as conn:
+        return pd.read_sql_query("SELECT * FROM modelos_proposta ORDER BY nome_modelo ASC", conn)
+
+def salvar_modelo_proposta(nome, texto, descricao="", valor=0.0):
+    """Salva ou atualiza um modelo de proposta."""
+    with get_connection() as conn:
+        c = conn.cursor()
+        # Verificar se já existe
+        existe = c.execute("SELECT id FROM modelos_proposta WHERE nome_modelo = ?", (nome,)).fetchone()
+        
+        if existe:
+            c.execute("UPDATE modelos_proposta SET descricao_padrao=?, valor_sugerido=?, area_atuacao=? WHERE id=?",
+                      (texto, valor, descricao, existe['id']))
+            logger.info(f"Modelo '{nome}' atualizado.")
+        else:
+            c.execute("INSERT INTO modelos_proposta (nome_modelo, descricao_padrao, valor_sugerido, area_atuacao) VALUES (?, ?, ?, ?)",
+                      (nome, texto, valor, descricao))
+            logger.info(f"Modelo '{nome}' criado.")
+
+def gerar_proposta_texto(id_modelo, dados_cliente):
+    """
+    Gera o texto da proposta substituindo placeholders pelos dados do cliente.
+    
+    Args:
+        id_modelo: ID do modelo na tabela modelos_proposta
+        dados_cliente: Dict ou Series com dados do cliente (nome, cpf, etc)
+    
+    Returns:
+        String com o texto formatado
+    """
+    with get_connection() as conn:
+        modelo = conn.execute("SELECT * FROM modelos_proposta WHERE id = ?", (id_modelo,)).fetchone()
+        
+        if not modelo:
+            return "Erro: Modelo não encontrado."
+            
+        texto = modelo['descricao_padrao']
+        
+        # Substituições
+        # Usar .get() para evitar erros se a chave não existir
+        texto = texto.replace("{nome}", str(dados_cliente.get('nome', '')))
+        texto = texto.replace("{cpf}", str(dados_cliente.get('cpf_cnpj', '')))
+        texto = texto.replace("{email}", str(dados_cliente.get('email', '')))
+        texto = texto.replace("{endereco}", str(dados_cliente.get('endereco', '')))
+        
+        # Formatar valor se existir na proposta do cliente, senão usar do modelo
+        valor = dados_cliente.get('proposta_valor')
+        if not valor: valor = modelo['valor_sugerido']
+        texto = texto.replace("{valor}", f"R$ {valor:,.2f}")
+        
+        return texto

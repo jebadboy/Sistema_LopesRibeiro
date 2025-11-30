@@ -1,102 +1,192 @@
-# 🚀 Guia de Deploy - Lopes & Ribeiro System
+# 🚀 Guia de Publicação do Sistema Lopes & Ribeiro
 
-## Passo 1: Subir para o GitHub
+## 📋 Índice
+1. [Opções de Deploy](#opções-de-deploy)
+2. [Opção Recomendada: Streamlit Cloud](#opção-1-streamlit-cloud-recomendado)
+3. [Opção Alternativa: ngrok](#opção-2-ngrok-acesso-temporário)
+4. [Configurações Importantes](#configurações-importantes)
 
-1. Abra o terminal no VS Code (Ctrl + ')
-2. Execute os comandos:
+---
+
+## Opções de Deploy
+
+| Opção | Custo | Dificuldade | Permanente | Recomendado |
+|-------|-------|-------------|------------|-------------|
+| **Streamlit Cloud** | Gratuito | ⭐ Fácil | ✅ Sim | ✅ **SIM** |
+| **ngrok** | Gratuito | ⭐ Muito Fácil | ❌ Não | Para testes |
+| **VPS** | $6-12/mês | ⭐⭐⭐ Difícil | ✅ Sim | Prod. |
+
+---
+
+## Opção 1: Streamlit Cloud (RECOMENDADO) 🌟
+
+### ✅ Vantagens
+- **100% GRATUITO** para projetos privados
+- Acesso de qualquer lugar (PC, celular, tablet)
+- URL personalizada: `https://seu-app.streamlit.app`
+- Deploy automático via GitHub
+- SSL/HTTPS incluído
+
+### 📝 Passo a Passo
+
+#### 1. Preparar o Projeto
+
+**a) Verificar `requirements.txt`:**
+```txt
+streamlit
+pandas
+plotly
+openpyxl
+google-generativeai
+```
+
+**b) Criar `.streamlit/config.toml`:**
+```toml
+[theme]
+primaryColor = "#0066cc"
+backgroundColor = "#ffffff"
+
+[server]
+headless = true
+port = 8501
+```
+
+**c) Atualizar `.gitignore`:**
+```
+*.db
+*.log
+__pycache__/
+.env
+backups/
+```
+
+#### 2. Subir para GitHub
 
 ```bash
+cd "H:\Meu Drive\automatizacao\Sistema_LopesRibeiro"
 git add .
-git commit -m "Preparando sistema para deploy na nuvem"
+git commit -m "Preparando para deploy"
 git push origin main
 ```
 
----
+#### 3. Deploy no Streamlit Cloud
 
-## Passo 2: Deploy no Streamlit Cloud
+1. Acesse https://streamlit.io/cloud
+2. Clique em "Sign in with GitHub"
+3. Clique em "New app"
+4. Selecione:
+   - Repository: `jebadboy/Sistema_LopesRibeiro`
+   - Branch: `main`
+   - Main file: `app.py`
+5. Clique em "Deploy!"
 
-### 2.1 Criar Conta
-1. Acesse: https://streamlit.io/cloud
-2. Clique em **"Sign up"**
-3. Escolha **"Continue with GitHub"**
-4. Autorize o Streamlit a acessar seus repositórios
+**🎉 Pronto! Aguarde 2-5 minutos**
 
-### 2.2 Fazer Deploy
-1. No painel do Streamlit Cloud, clique em **"New app"**
-2. Preencha:
-   - **Repository:** `jebadboy/Sistema_LopesRibeiro`
-   - **Branch:** `main`
-   - **Main file path:** `app.py`
-3. Clique em **"Advanced settings"**
-4. Em **"Secrets"**, adicione:
-   ```toml
-   GOOGLE_API_KEY = "SUA_CHAVE_DO_GEMINI_AQUI"
-   ```
-5. Clique em **"Deploy!"**
-
----
-
-## Passo 3: Aguardar (2-5 minutos)
-
-O Streamlit Cloud vai:
-- ✅ Instalar as dependências (`requirements.txt`)
-- ✅ Configurar o ambiente
-- ✅ Iniciar o app
-
-Você receberá uma URL tipo:
+Você receberá uma URL como:
 ```
-https://lopesribeiro.streamlit.app
+https://sistema-lopes-ribeiro.streamlit.app
 ```
 
 ---
 
-## ⚠️ IMPORTANTE: Banco de Dados na Nuvem
+## Opção 2: ngrok (Acesso Temporário) ⚡
 
-**PROBLEMA:** O SQLite atual não persiste dados na nuvem. A cada restart, os dados são perdidos.
+### Para testes rápidos ou demonstrações
 
-**SOLUÇÃO (Opcional para Produção):**
-Use um banco PostgreSQL gratuito:
-- **Opção 1:** Neon (https://neon.tech) - 500MB grátis
-- **Opção 2:** Supabase (https://supabase.com) - 500MB grátis
+#### 1. Instalar ngrok
+Baixe em: https://ngrok.com/download
 
-**Se quiser migrar para PostgreSQL, me avise que eu adapto o código!**
+#### 2. Configurar token
+```bash
+ngrok config add-authtoken SEU_TOKEN
+```
+
+#### 3. Iniciar sistema local
+```bash
+streamlit run app.py
+```
+
+#### 4. Em outro terminal, criar túnel
+```bash
+ngrok http 8501
+```
+
+#### 5. Acessar URL fornecida
+```
+https://xxxx.ngrok-free.app
+```
+
+⚠️ **Limitações:**
+- URL muda a cada reinício
+- Não é permanente
 
 ---
 
-## 📱 Acessar de Qualquer Dispositivo
+##Configurações Importantes ⚙️
 
-Depois do deploy, basta:
-1. Abrir o navegador (PC/Tablet/Celular)
-2. Acessar a URL do Streamlit Cloud
-3. Usar normalmente!
+### ⚠️ Banco de Dados em Produção
 
-**Não precisa instalar nada nos dispositivos.**
+**PROBLEMA:** SQLite não persiste dados na nuvem (Streamlit Cloud reinicia diariamente)
+
+**SOLUÇÕES:**
+
+**Opção A - Continuar com SQLite (Simples)**
+- Aceitar que dados são temporários
+- Fazer backup manual regularmente
+- Ideal para testes
+
+**Opção B - Migrar para PostgreSQL (Recomendado)**
+- Use serviço gratuito:
+  - **Supabase** (500MB grátis)
+  - **Neon** (500MB grátis)
+- Dados permanentes
+- Ideal para produção
+
+### 🔒 Proteger Acesso
+
+O sistema já tem login integrado (admin/admin123).
+
+**Para produção:**
+1. Mude a senha padrão
+2. Considere adicionar autenticação do Google
 
 ---
 
-## 🔒 Segurança
+## 📱 Acesso nos Dispositivos
 
-- ✅ HTTPS automático (conexão segura)
-- ✅ Chave API protegida (não fica no código)
-- ⚠️ Qualquer pessoa com a URL pode acessar
+### PC/Laptop
+Abra qualquer navegador e acesse a URL
 
-**Para adicionar login/senha:**
-- Posso implementar autenticação simples (usuário/senha)
-- Ou usar Google Login
+### Celular/Tablet
+1. Abra no navegador (Chrome/Safari)
+2. Menu > "Adicionar à tela inicial"
+3. Ícone aparecerá como um app!
+
+---
+
+## ✅ Checklist de Deploy
+
+- [ ] `requirements.txt` completo
+- [ ] `.gitignore` configurado
+- [ ] Código no GitHub
+- [ ] Deploy no Streamlit Cloud
+- [ ] Teste de acesso
 
 ---
 
 ## 🆘 Problemas Comuns
 
-### "ModuleNotFoundError"
-→ Falta alguma biblioteca no `requirements.txt`
+**"ModuleNotFoundError"**
+→ Adicione a biblioteca em `requirements.txt`
 
-### "Secrets não encontrados"
-→ Adicionar `GOOGLE_API_KEY` nos Secrets do Streamlit Cloud
+**App reiniciando**
+→ Verifique logs no Streamlit Cloud
 
-### "App reiniciando sempre"
-→ Verificar logs no painel do Streamlit Cloud
+**Banco de dados vazio após reiniciar**
+→ Normal com SQLite. Migre para PostgreSQL
 
 ---
 
-**Precisa de ajuda em algum passo? Me chame!**
+**🎉 Sistema publicado com sucesso!**
+
+Para PostgreSQL ou customizações, me avise!

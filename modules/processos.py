@@ -102,6 +102,72 @@ def render_gerenciar_processos():
                 st.success("Andamento registrado!")
                 st.rerun()
 
+        # ===== LINK PÚBLICO =====
+        import token_manager as tm
+        
+        st.markdown("---")
+        st.markdown("### 🔗 Link Público de Consulta")
+        
+        col_token1, col_token2 = st.columns([2, 1])
+        
+        with col_token1:
+            dias_validade = st.number_input(
+                "Validade do link (dias)", 
+                min_value=1,
+                max_value=365, 
+                value=30,
+                help="Número de dias até o link expirar",
+                key=f"dias_val_{pid}"
+            )
+        
+        with col_token2:
+            if st.button("Gerar Link Público", type="primary", use_container_width=True, key=f"gerar_{pid}"):
+                token = tm.gerar_token_publico(pid, dias_validade)
+                
+                if token:
+                    url_base = "http://localhost:8501"
+                    link_publico = f"{url_base}/public_view?token={token}"
+                    
+                    st.session_state[f'link_gerado_{pid}'] = link_publico
+                    st.session_state[f'token_validade_{pid}'] = dias_validade
+                    st.success("Link gerado com sucesso!")
+                    st.rerun()
+        
+        # Exibir link se foi gerado
+        if f'link_gerado_{pid}' in st.session_state:
+            st.code(st.session_state[f'link_gerado_{pid}'], language=None)
+            
+            st.info(
+                f"📋 Copie este link e envie ao cliente. "
+                f"Válido por {st.session_state.get(f'token_validade_{pid}', 30)} dias."
+            )
+        
+        # Listar tokens ativos
+        st.markdown("#### Tokens Ativos")
+        tokens_list = tm.listar_tokens_processo(pid)
+        
+        if tokens_list:
+            for token_info in tokens_list:
+                col1, col2, col3 = st.columns([3, 2, 1])
+                
+                with col1:
+                    st.caption(f"Token: ...{token_info['token'][-10:]}")
+                
+                with col2:
+                    status = "✅ Ativo" if token_info['ativo'] else "❌ Revogado"
+                    acessos = token_info['acessos']
+                    st.caption(f"{status} | Acessos: {acessos}")
+                
+                with col3:
+                    if token_info['ativo']:
+                        if st.button("Revogar", key=f"revoke_{token_info['id']}"):
+                            if tm.revogar_token_publico(token_info['token']):
+                                st.success("Token revogado!")
+                                st.rerun()
+        else:
+            st.caption("Nenhum token gerado ainda")
+
+
     try:
         st.download_button("📥 Baixar Lista de Processos", ut.to_excel(df), "processos.xlsx")
     except:

@@ -1,9 +1,15 @@
-*.pyc
-__pycache__/
+# Arquivos e pastas que NÃO devem ir para o Git
 *.db
 *.log
+__pycache__/
+*.pyc
 .env
-backups/*.db
-relatorios/*.xlsx
-*.bak_*
+backups/
 .streamlit/secrets.toml
+test_*.py
+create_postgres_schema.py
+*.bak
+*.backup_*
+add_*.py
+fix_*.py
+migrate_*.py

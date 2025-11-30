@@ -5,7 +5,7 @@ import hashlib
 import time
 
 # Importar Módulos
-from modules import clientes, financeiro, processos, dashboard, admin
+from modules import clientes, financeiro, processos, dashboard, admin, relatorios, ajuda
 
 # --- CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="Lopes & Ribeiro System", page_icon="⚖️", layout="wide")
@@ -73,7 +73,9 @@ else:
             "Painel Geral": dashboard,
             "Clientes (CRM)": clientes,
             "Processos": processos,
-            "Financeiro": financeiro
+            "Financeiro": financeiro,
+            "Relatórios": relatorios,
+            "📚 Ajuda": ajuda
         }
         
         # Adicionar Admin apenas se for admin
