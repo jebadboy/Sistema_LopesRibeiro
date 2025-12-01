@@ -217,36 +217,199 @@ def render_ficha_cliente(dd):
         idx_pg = pg_opts.index(pg_val) if pg_val in pg_opts else 0
         pg = c_p4.selectbox("Pagamento", pg_opts, index=idx_pg)
         
-        ob = st.text_area("Objeto (Descrição)", value=dd['proposta_objeto'] if dd['proposta_objeto'] else "")
+        # Data de Pagamento (se parcelado)
+        data_pag = None
+        if pg == "Parcelado Mensal":
+            val_data = dd.get('proposta_data_pagamento')
+            if val_data:
+                try:
+                    val_data = datetime.strptime(val_data, '%Y-%m-%d').date()
+                except:
+                    val_data = datetime.now().date()
+            else:
+                val_data = datetime.now().date()
+            data_pag = st.date_input("Vencimento 1ª Parcela", value=val_data, format="DD/MM/YYYY")
+        
+        ob = st.text_area("Objeto (Descrição)", value=dd['proposta_objeto'] if dd['proposta_objeto'] else "", key="txt_objeto")
         
         cb1, cb2 = st.columns(2)
-        if cb1.button("💾 Salvar Proposta"):
-            db.sql_run("UPDATE clientes SET proposta_valor=?, proposta_entrada=?, proposta_parcelas=?, proposta_pagamento=?, proposta_objeto=? WHERE id=?", 
-                       (vp, ve, np_parc, pg, ob, int(dd['id'])))
-            st.success("Proposta salva!")
-            st.rerun()
+        
+        # Botão SALVAR e GERAR
+        if cb1.button("💾 Salvar e Atualizar DOC", type="primary"):
+            # 1. Salvar no Banco
+            data_str = data_pag.strftime('%Y-%m-%d') if data_pag else None
+            db.sql_run("UPDATE clientes SET proposta_valor=?, proposta_entrada=?, proposta_parcelas=?, proposta_pagamento=?, proposta_objeto=?, proposta_data_pagamento=? WHERE id=?", 
+                       (vp, ve, np_parc, pg, ob, data_str, int(dd['id'])))
             
-        with cb2:
+            # 2. Gerar Documento Atualizado
             doc_data = {
                 'nome': dd['nome'], 
+                'cpf_cnpj': dd['cpf_cnpj'],
+                'telefone': dd['telefone'],
                 'proposta_valor': vp, 
                 'proposta_entrada': ve, 
                 'proposta_parcelas': np_parc, 
                 'proposta_objeto': ob, 
-                'proposta_pagamento': pg
+                'proposta_pagamento': pg,
+                'proposta_data_pagamento': data_str
             }
-            doc = ut.criar_doc("Proposta", doc_data)
-            st.download_button("📄 Baixar DOC Proposta", doc, f"Prop_{dd['nome']}.docx", type="secondary")
+            doc_bytes = ut.criar_doc("Proposta", doc_data)
+            st.session_state['doc_proposta_bytes'] = doc_bytes
+            st.session_state['doc_proposta_nome'] = f"Prop_{dd['nome']}.docx"
+            
+            st.success("Proposta salva e documento atualizado!")
+            st.rerun()
+            
+        with cb2:
+            # Botão de Download (Pega do Session State ou Gera do DB)
+            # Botão de Download (Pega do Session State ou Gera do DB)
+            doc_download = st.session_state.get('doc_proposta_bytes')
+            nome_download = st.session_state.get('doc_proposta_nome', f"Prop_{dd['nome']}.docx")
+            
+            if not doc_download:
+                # Se não tem no state, gera com o que tem no banco (dd)
+                doc_data_db = {
+                    'nome': dd['nome'], 
+                    'cpf_cnpj': dd['cpf_cnpj'],
+                    'telefone': dd['telefone'],
+                    'proposta_valor': ut.safe_float(dd['proposta_valor']), 
+                    'proposta_entrada': ut.safe_float(dd['proposta_entrada']), 
+                    'proposta_parcelas': ut.safe_int(dd['proposta_parcelas']), 
+                    'proposta_objeto': dd['proposta_objeto'] if dd['proposta_objeto'] else "", 
+                    'proposta_pagamento': dd['proposta_pagamento']
+                }
+                doc_download = ut.criar_doc("Proposta", doc_data_db)
+                st.caption("⚠️ Baixa a versão salva anteriormente.")
+            
+            st.download_button(
+                "📄 Baixar DOC Proposta", 
+                doc_download, 
+                nome_download, 
+                type="secondary"
+            )
 
     # MODO DOCS FINAIS
     if dd['status_cliente'] == 'ATIVO':
         st.markdown("### 🖨️ Documentos Finais")
-        d1, d2, d3 = st.columns(3)
-        with d1: st.download_button("Procuração", ut.criar_doc("Procuracao", dd), "proc.docx", use_container_width=True)
-        with d2: st.download_button("Hipossuf.", ut.criar_doc("Hipossuficiencia", dd), "hipo.docx", use_container_width=True)
-        with d3: st.download_button("Contrato", ut.criar_doc("Contrato", dd), "cont.docx", use_container_width=True)
+        
+        with st.container(border=True):
+            st.markdown("#### 📄 Procuração e Hipossuficiência")
+            
+            # --- PROCURAÇÃO ---
+            with st.expander("Procuração", expanded=True):
+                c_proc1, c_proc2 = st.columns([1, 2])
+                
+                # Opções
+                pod_esp = c_proc1.checkbox("Incluir Poderes Especiais", value=True, help="Receber, dar quitação, transigir, etc.")
+                
+                # Botão Gerar
+                if c_proc1.button("📄 Gerar Procuração (DOC)", key="btn_gerar_proc"):
+                    dados_proc = dd.copy()
+                    # Adicionar endereço completo se faltar
+                    doc_bytes = ut.criar_doc("Procuracao", dados_proc, opcoes={'poderes_especiais': pod_esp})
+                    st.download_button(
+                        label="⬇️ Baixar Procuração",
+                        data=doc_bytes,
+                        file_name=f"Procuracao_{dd['nome']}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="down_proc"
+                    )
+                
+                # Link Drive
+                link_proc_atual = dd.get('link_procuracao', '')
+                novo_link_proc = c_proc2.text_input("Link Google Drive (Procuração)", value=link_proc_atual if link_proc_atual else "")
+                
+                c_act1, c_act2 = c_proc2.columns(2)
+                if c_act1.button("Salvar Link Procuração"):
+                    db.crud_update('clientes', {'link_procuracao': novo_link_proc}, 'id=?', (dd['id'],), 'Atualizar Link Procuração')
+                    st.success("Link salvo!")
+                    st.rerun()
+                
+                if link_proc_atual:
+                    c_act2.link_button("📂 Abrir no Drive", link_proc_atual)
+
+            # --- HIPOSSUFICIÊNCIA ---
+            with st.expander("Declaração de Hipossuficiência", expanded=True):
+                c_hip1, c_hip2 = st.columns([1, 2])
+                
+                # Botão Gerar
+                if c_hip1.button("📄 Gerar Declaração (DOC)", key="btn_gerar_hipo"):
+                    doc_bytes = ut.criar_doc("Hipossuficiencia", dd)
+                    st.download_button(
+                        label="⬇️ Baixar Declaração",
+                        data=doc_bytes,
+                        file_name=f"Hipossuficiencia_{dd['nome']}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="down_hipo"
+                    )
+                
+                # Link Drive
+                link_hipo_atual = dd.get('link_hipossuficiencia', '')
+                novo_link_hipo = c_hip2.text_input("Link Google Drive (Hipossuficiência)", value=link_hipo_atual if link_hipo_atual else "")
+                
+                c_act3, c_act4 = c_hip2.columns(2)
+                if c_act3.button("Salvar Link Hipo"):
+                    db.crud_update('clientes', {'link_hipossuficiencia': novo_link_hipo}, 'id=?', (dd['id'],), 'Atualizar Link Hipo')
+                    st.success("Link salvo!")
+                    st.rerun()
+                
+                if link_hipo_atual:
+                    c_act4.link_button("📂 Abrir no Drive", link_hipo_atual)
+            
+            st.divider()
+            
+            d1, d2, d3 = st.columns(3)
+            
+            # Procuração com Opções
+            with d1: 
+                doc_proc = ut.criar_doc("Procuracao", dd, opcoes={'poderes_especiais': pod_esp})
+                st.download_button("📄 Baixar Procuração", doc_proc, f"Procuracao_{dd['nome']}.docx", use_container_width=True)
+            
+            # Hipossuficiência
+            with d2: 
+                if just_grat:
+                    doc_hipo = ut.criar_doc("Hipossuficiencia", dd)
+                    st.download_button("📄 Baixar Hipossuf.", doc_hipo, f"Hipo_{dd['nome']}.docx", use_container_width=True)
+                else:
+                    st.caption("Hipossuficiência não selecionada")
+            
+            # Contrato
+            with d3: 
+                doc_cont = ut.criar_doc("Contrato", dd)
+                st.download_button("📄 Baixar Contrato", doc_cont, f"Contrato_{dd['nome']}.docx", use_container_width=True)
+
+    # HISTÓRICO FINANCEIRO
+    with st.expander("💰 Histórico Financeiro"):
+        df_fin = db.sql_get("financeiro")
+        if not df_fin.empty:
+            df_cli_fin = df_fin[df_fin['id_cliente'] == dd['id']].copy()
+            if not df_cli_fin.empty:
+                st.dataframe(
+                    df_cli_fin[['data', 'tipo', 'descricao', 'valor', 'status_pagamento']],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "valor": st.column_config.NumberColumn(format="R$ %.2f")
+                    }
+                )
+                
+                total_pago = df_cli_fin[(df_cli_fin['tipo'] == 'Entrada') & (df_cli_fin['status_pagamento'] == 'Pago')]['valor'].sum()
+                st.metric("Total Pago pelo Cliente", f"R$ {total_pago:,.2f}")
+            else:
+                st.info("Nenhum lançamento financeiro vinculado a este cliente.")
+        else:
+            st.info("Nenhum lançamento financeiro no sistema.")
 
     st.divider()
+    
+    # Integração Comercial -> Processo
+    if dd['status_cliente'] in ['ATIVO', 'EM NEGOCIAÇÃO']:
+        if st.button("✅ Converter em Processo", help="Cria um processo automaticamente com base na proposta"):
+             st.session_state.pre_fill_client = dd['nome']
+             st.session_state.nav_selection = "Processos"
+             st.success("Redirecionando para criação de processo...")
+             st.rerun()
+             
     if st.button("🗑️ Excluir Cliente", type="primary"):
         db.sql_run("DELETE FROM clientes WHERE id=?", (int(dd['id']),))
         st.success("Cliente excluído.")

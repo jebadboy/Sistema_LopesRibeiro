@@ -101,6 +101,17 @@ def render_gerenciar_processos():
                 )
                 st.success("Andamento registrado!")
                 st.rerun()
+        
+        # Botão de Integração Financeira
+        if st.button("💰 Lançar Despesa/Honorário", use_container_width=True):
+            # Salvar contexto no session_state para o módulo financeiro
+            st.session_state['financeiro_pre_fill'] = {
+                'id_processo': pid,
+                'cliente_nome': df[df['id'] == pid].iloc[0]['cliente_nome'],
+                'descricao': f"Ref. Processo: {df[df['id'] == pid].iloc[0]['acao']}"
+            }
+            # Redirecionar (Simulado via mensagem, pois streamlit não muda aba nativamente fácil sem rerun total)
+            st.info("Vá para a aba **Financeiro** para concluir o lançamento com os dados pré-preenchidos.")
 
         # ===== LINK PÚBLICO =====
         import token_manager as tm

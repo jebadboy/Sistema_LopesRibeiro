@@ -5,14 +5,16 @@ import shutil
 import os
 from contextlib import contextmanager
 import logging
+import hashlib
+import re
 
 DB_NAME = 'dados_escritorio.db'
 TABELAS_VALIDAS = [
     'clientes', 'financeiro', 'processos', 'andamentos',
-    'agenda', 'documentos_processo', 'parcelamentos', 'modelos_proposta', 'usuarios', 'logs', 'tokens_publicos'
+    'agenda', 'documentos_processo', 'parcelamentos', 'modelos_proposta',
+    'usuarios', 'config'
 ]
 
-# Configurar logging com encoding UTF-8 (CORREÇÃO: B2)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -95,27 +97,31 @@ def init_db():
                     proposta_entrada REAL,
                     proposta_parcelas INTEGER,
                     proposta_objeto TEXT,
-                    proposta_pagamento TEXT
+                    proposta_pagamento TEXT,
+                    proposta_data_pagamento TEXT,
+                    tipo_pessoa TEXT DEFAULT 'Física',
+                    link_procuracao TEXT,
+                    link_hipossuficiencia TEXT
                 )
             ''')
             
-            # Tabela de Financeiro (CORREÇÃO: C1, C3 - Schema atualizado com novas colunas)
+            # Tabela Financeira
             c.execute('''
                 CREATE TABLE IF NOT EXISTS financeiro (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     data TEXT,
-                    tipo TEXT CHECK(tipo IN ('Entrada', 'Saída')),
+                    tipo TEXT,
                     categoria TEXT,
                     descricao TEXT,
-                    valor REAL NOT NULL,
-                    responsavel TEXT,
-                    status_pagamento TEXT CHECK(status_pagamento IN ('Pago', 'Pendente')) DEFAULT 'Pendente',
+                    valor REAL,
                     vencimento TEXT,
+                    status_pagamento TEXT,
+                    comprovante TEXT,
                     id_cliente INTEGER,
                     id_processo INTEGER,
-                    percentual_parceria REAL DEFAULT 0.0,
-                    FOREIGN KEY (id_cliente) REFERENCES clientes(id) ON DELETE SET NULL,
-                    FOREIGN KEY (id_processo) REFERENCES processos(id) ON DELETE SET NULL
+                    percentual_parceria REAL,
+                    FOREIGN KEY (id_cliente) REFERENCES clientes(id),
+                    FOREIGN KEY (id_processo) REFERENCES processos(id)
                 )
             ''')
             
@@ -123,11 +129,19 @@ def init_db():
             c.execute('''
                 CREATE TABLE IF NOT EXISTS processos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    cliente_nome TEXT,
-                    acao TEXT,
-                    proximo_prazo TEXT,
-                    responsavel TEXT,
-                    status TEXT DEFAULT 'Ativo'
+                    numero_processo TEXT,
+                    cliente TEXT,
+                    parte_contraria TEXT,
+                    vara TEXT,
+                    comarca TEXT,
+                    status TEXT,
+                    fase_processual TEXT,
+                    valor_causa REAL,
+                    data_distribuicao TEXT,
+                    link_drive TEXT,
+                    obs TEXT,
+                    id_cliente INTEGER,
+                    FOREIGN KEY (id_cliente) REFERENCES clientes(id)
                 )
             ''')
             
@@ -135,68 +149,37 @@ def init_db():
             c.execute('''
                 CREATE TABLE IF NOT EXISTS andamentos (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    id_processo INTEGER NOT NULL,
+                    id_processo INTEGER,
                     data TEXT,
                     descricao TEXT,
                     responsavel TEXT,
-                    FOREIGN KEY (id_processo) REFERENCES processos(id) ON DELETE CASCADE
+                    FOREIGN KEY (id_processo) REFERENCES processos(id)
                 )
             ''')
             
             conn.commit()
-            logger.info("Tabelas principais inicializadas com sucesso")
+            logger.info("Banco de dados inicializado com sucesso (Tabelas Core)")
             
-            # Chamar inicialização de tabelas v2 (novas funcionalidades)
+            # Inicializar tabelas v2
             inicializar_tabelas_v2()
             
     except Exception as e:
         logger.error(f"Erro ao inicializar banco de dados: {e}")
-        raise RuntimeError(f"Falha na inicialização do banco: {e}")
+        raise
 
-def migrar_adicionar_id_cliente_financeiro():
-    """
-    MIGRAÇÃO FASE 1: Adiciona coluna id_cliente à tabela financeiro.
-    Esta função deve ser executada UMA VEZ para migrar o banco existente.
-    
-    IMPORTANTE: Esta migração não preenche automaticamente os dados.
-    Os dados devem ser preenchidos manualmente ou por script separado.
-    """
+# --- FUNÇÕES GERAIS DE SQL ---
+
+def sql_run(query, params=()):
+    """Executa uma query SQL de modificação (INSERT, UPDATE, DELETE)."""
     try:
         with get_connection() as conn:
             c = conn.cursor()
-            
-            # Verificar se a coluna já existe
-            c.execute("PRAGMA table_info(financeiro)")
-            columns = [col[1] for col in c.fetchall()]
-            
-            if 'id_cliente' not in columns:
-                logger.info("Adicionando coluna id_cliente à tabela financeiro...")
-                
-                # Adicionar coluna id_cliente
-                c.execute("ALTER TABLE financeiro ADD COLUMN id_cliente INTEGER")
-                
-                # Adicionar colunas para relatórios mensais
-                c.execute("ALTER TABLE financeiro ADD COLUMN mes_referencia TEXT")
-                c.execute("ALTER TABLE financeiro ADD COLUMN ano_referencia INTEGER")
-                
-                # Nota: FK não pode ser adicionada via ALTER TABLE no SQLite
-                # A constraint FK deve ser criada ao criar a tabela ou recriar a tabela
-                
-                conn.commit()
-                logger.info("Coluna id_cliente adicionada com sucesso à tabela financeiro")
-                logger.warning("ATENÇÃO: Os dados existentes não foram migrados automaticamente.")
-                logger.warning("Execute o script de migração de dados ou preencha manualmente.")
-                
-                return "Migração concluída. Coluna id_cliente adicionada."
-            else:
-                logger.info("Coluna id_cliente já existe na tabela financeiro")
-                return "Migração já foi executada anteriormente."
-                
+            c.execute(query, params)
+            conn.commit()
+            return c.lastrowid
     except Exception as e:
-        logger.error(f"Erro na migração: {e}")
-        raise RuntimeError(f"Falha na migração: {e}")
-
-# --- FUNÇÕES BÁSICAS DE CONSULTA ---
+        logger.error(f"Erro ao executar SQL: {query} - Params: {params} - Erro: {e}")
+        raise
 
 def sql_get(tabela, ordem=""):
     """Busca dados de uma tabela com validação de segurança."""
@@ -204,6 +187,14 @@ def sql_get(tabela, ordem=""):
         logger.error(f"Tentativa de acesso a tabela inválida: {tabela}")
         raise ValueError(f"Tabela inválida: {tabela}. Tabelas permitidas: {TABELAS_VALIDAS}")
     
+    # Validação rigorosa do parâmetro 'ordem' para prevenir SQL Injection
+    if ordem:
+        # Permite apenas letras, números, espaços, vírgulas e underscores
+        # Exemplo válido: "nome ASC", "data_criacao DESC, id ASC"
+        if not re.match(r"^[a-zA-Z0-9_, ]+$", ordem):
+             logger.warning(f"Tentativa de injeção em ORDER BY: {ordem}")
+             raise ValueError("Parâmetro de ordenação inválido.")
+
     try:
         with get_connection() as conn:
             sql = f"SELECT * FROM {tabela}"
@@ -214,37 +205,11 @@ def sql_get(tabela, ordem=""):
         logger.error(f"Erro ao buscar dados da tabela {tabela}: {e}")
         return pd.DataFrame()  # Retorna DataFrame vazio em caso de erro
 
-def sql_run(query, dados=()):
-    """Executa query SQL com tratamento robusto de exceções."""
-    try:
-        with get_connection() as conn:
-            c = conn.cursor()
-            c.execute(query, dados)
-            conn.commit()
-            logger.info(f"Query executada com sucesso: {query[:50]}...")
-    except sqlite3.IntegrityError as e:
-        logger.error(f"Erro de integridade no banco: {e}")
-        raise ValueError(f"Erro de integridade: {e}. Verifique se não há duplicação de dados.")
-    except sqlite3.OperationalError as e:
-        logger.error(f"Erro operacional no banco: {e}")
-        raise RuntimeError(f"Erro operacional no banco de dados: {e}")
-    except Exception as e:
-        logger.error(f"Erro inesperado no banco: {e}")
-        raise RuntimeError(f"Erro no banco de dados: {e}")
-
 # --- FUNÇÕES HELPER CRUD COM LOGGING AUTOMÁTICO ---
 
 def crud_insert(tabela, dados_dict, contexto=""):
     """
     Helper para INSERT com logging automático.
-    
-    Args:
-        tabela: Nome da tabela
-        dados_dict: Dicionário {coluna: valor}
-        contexto: Descrição da operação para log (ex: "cadastro de cliente")
-    
-    Returns:
-        ID do registro inserido ou None em caso de erro
     """
     colunas = ', '.join(dados_dict.keys())
     placeholders = ', '.join(['?' for _ in dados_dict])
@@ -264,22 +229,12 @@ def crud_insert(tabela, dados_dict, contexto=""):
         logger.error(f"Erro de integridade ao inserir em '{tabela}': {e} - {contexto}")
         raise ValueError(f"Erro de integridade: {e}")
     except Exception as e:
-        logger.error(f"Erro ao inserir em '{tabela}': {e} -  {contexto}")
+        logger.error(f"Erro ao inserir em '{tabela}': {e} - {contexto}")
         raise RuntimeError(f"Erro no banco de dados: {e}")
 
 def crud_update(tabela, dados_dict, condicao, valores_condicao, contexto=""):
     """
     Helper para UPDATE com logging automático.
-    
-    Args:
-        tabela: Nome da tabela
-        dados_dict: Dicionário {coluna: valor} para atualizar
-        condicao: String WHERE (ex: "id = ?")
-        valores_condicao: Tupla de valores para a condição
-        contexto: Descrição da operação para log
-    
-    Returns:
-        Número de linhas afetadas
     """
     set_clause = ', '.join([f"{col} = ?" for col in dados_dict.keys()])
     valores = tuple(dados_dict.values()) + valores_condicao
@@ -301,15 +256,6 @@ def crud_update(tabela, dados_dict, condicao, valores_condicao, contexto=""):
 def crud_delete(tabela, condicao, valores_condicao, contexto=""):
     """
     Helper para DELETE com logging automático.
-    
-    Args:
-        tabela: Nome da tabela
-        condicao: String WHERE (ex: "id = ?")
-        valores_condicao: Tupla de valores para a condição
-        contexto: Descrição da operação para log
-    
-    Returns:
-        Número de linhas deletadas
     """
     query = f"DELETE FROM {tabela} WHERE {condicao}"
     
@@ -344,7 +290,7 @@ def ver_inadimplencia(nome):
             return "INADIMPLENTE" if not df.empty else "Adimplente"
     except Exception as e:
         logger.error(f"Erro ao verificar inadimplência para {nome}: {e}")
-        return "Erro ao verificar"  # Mensagem de erro amigável
+        return "Erro ao verificar"
 
 def get_historico(id_processo):
     """Busca histórico de andamentos de um processo."""
@@ -353,25 +299,19 @@ def get_historico(id_processo):
             return pd.read_sql("SELECT data, descricao, responsavel FROM andamentos WHERE id_processo=? ORDER BY data DESC", conn, params=(id_processo,))
     except Exception as e:
         logger.error(f"Erro ao buscar histórico do processo {id_processo}: {e}")
-        return pd.DataFrame(columns=['data', 'descricao', 'responsavel'])  # DataFrame vazio em caso de erro
+        return pd.DataFrame(columns=['data', 'descricao', 'responsavel'])
 
 def kpis():
     """Calcula KPIs financeiros e operacionais."""
     with get_connection() as conn:
-        f = pd.read_sql("SELECT * FROM financeiro", conn)
-        c = pd.read_sql("SELECT * FROM clientes", conn)
-        p = pd.read_sql("SELECT * FROM processos", conn)
-    
-    saldo = 0
-    receber = 0
-    num_clientes = len(c[c['status_cliente']=='ATIVO']) if not c.empty else 0
-    num_processos = len(p) if not p.empty else 0
-
-    if not f.empty:
-        entradas = f[(f['tipo']=='Entrada')&(f['status_pagamento']=='Pago')]['valor'].sum()
-        saidas = f[(f['tipo']=='Saída')&(f['status_pagamento']=='Pago')]['valor'].sum()
-        saldo = entradas - saidas
-        receber = f[(f['tipo']=='Entrada')&(f['status_pagamento']=='Pendente')]['valor'].sum()
+        try:
+            saldo = pd.read_sql("SELECT SUM(CASE WHEN tipo='Entrada' THEN valor ELSE -valor END) FROM financeiro WHERE status_pagamento='Pago'", conn).iloc[0, 0] or 0.0
+            receber = pd.read_sql("SELECT SUM(valor) FROM financeiro WHERE tipo='Entrada' AND status_pagamento='Pendente'", conn).iloc[0, 0] or 0.0
+            num_clientes = pd.read_sql("SELECT COUNT(*) FROM clientes WHERE status_cliente='ATIVO'", conn).iloc[0, 0]
+            num_processos = pd.read_sql("SELECT COUNT(*) FROM processos WHERE status='Ativo'", conn).iloc[0, 0]
+        except Exception as e:
+            logger.error(f"Erro ao calcular KPIs: {e}")
+            return 0.0, 0.0, 0, 0
         
     return saldo, receber, num_clientes, num_processos
 
@@ -444,17 +384,71 @@ def inicializar_tabelas_v2():
             )
         ''')
         
+        # Tabela de Usuários
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                nome TEXT NOT NULL,
+                role TEXT DEFAULT 'user',
+                ativo INTEGER DEFAULT 1,
+                criado_em TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Tabela de Configurações (Chave-Valor)
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS config (
+                chave TEXT PRIMARY KEY,
+                valor TEXT
+            )
+        ''')
+        
+        # Criar usuário admin padrão se não existir
+        c.execute("SELECT count(*) FROM usuarios")
+        if c.fetchone()[0] == 0:
+            senha_admin = hashlib.sha256("admin".encode()).hexdigest()
+            c.execute("INSERT INTO usuarios (username, password_hash, nome, role, ativo) VALUES (?, ?, ?, ?, ?)",
+                      ('admin', senha_admin, 'Administrador', 'admin', 1))
+            logger.info("Usuário admin padrão criado.")
+        
         conn.commit()
         logger.info("Tabelas v2 inicializadas com sucesso")
+
+def get_config(chave, padrao=None):
+    """Busca valor de configuração."""
+    try:
+        with get_connection() as conn:
+            c = conn.cursor()
+            c.execute("SELECT valor FROM config WHERE chave=?", (chave,))
+            res = c.fetchone()
+            return res[0] if res else padrao
+    except:
+        return padrao
+
+def set_config(chave, valor):
+    """Define valor de configuração."""
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)", (chave, str(valor)))
+        conn.commit()
+
+def get_usuario_by_username(username):
+    """Busca usuário pelo username de forma segura."""
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT * FROM usuarios WHERE username = ?", (username,))
+        row = c.fetchone()
+        if row:
+            # Converter para dict/Series compatível com o resto do app
+            cols = [description[0] for description in c.description]
+            return pd.Series(dict(zip(cols, row)))
+        return None
 
 def get_agenda_eventos(filtro_tipo=None, filtro_responsavel=None, filtro_status=None):
     """
     Busca eventos da agenda com filtros opcionais.
-    
-    Args:
-        filtro_tipo: 'prazo', 'audiencia', 'tarefa' ou None
-        filtro_responsavel: nome do responsável ou None
-        filtro_status: 'pendente', 'concluido' ou None
     """
     with get_connection() as conn:
         query = "SELECT * FROM agenda WHERE 1=1"
@@ -503,33 +497,6 @@ def get_vinculos_financeiros(id_processo):
             params=(id_processo,)
         )
 
-# --- FUNÇÕES PARA FINANCEIRO ---
-
-def calcular_repasse_parceria(id_processo, valor_recebido):
-    """
-    Calcula o valor de repasse para o parceiro baseado no processo.
-    
-    Args:
-        id_processo: ID do processo
-        valor_recebido: Valor que foi recebido
-    
-    Returns:
-        dict com informações do repasse ou None
-    """
-    with get_connection() as conn:
-        c = conn.cursor()
-        c.execute("SELECT parceiro_nome, parceiro_percentual FROM processos WHERE id = ?", (id_processo,))
-        resultado = c.fetchone()
-        
-        if resultado and resultado['parceiro_nome'] and resultado['parceiro_percentual']:
-            valor_repasse = valor_recebido * (resultado['parceiro_percentual'] / 100)
-            return {
-                'parceiro_nome': resultado['parceiro_nome'],
-                'percentual': resultado['parceiro_percentual'],
-                'valor_repasse': valor_repasse
-            }
-        return None
-
 def get_parcelamentos(id_lancamento):
     """Busca todas as parcelas de um lançamento financeiro."""
     with get_connection() as conn:
@@ -559,202 +526,67 @@ def relatorio_inadimplencia():
         """
         return pd.read_sql_query(query, conn, params=(hoje, hoje))
 
-def relatorio_comissoes(data_inicio=None, data_fim=None):
-    """Gera relatório de comissões de parceiros."""
-    with get_connection() as conn:
-        query = """
-            SELECT 
-                descricao,
-                valor,
-                vencimento,
-                status_pagamento
-            FROM financeiro
-            WHERE categoria = 'Comissão Parceria'
-        """
-        params = []
-        
-        if data_inicio:
-            query += " AND vencimento >= ?"
-            params.append(data_inicio)
-        if data_fim:
-            query += " AND vencimento <= ?"
-            params.append(data_fim)
-        
-        query += " ORDER BY vencimento DESC"
-        
-        return pd.read_sql_query(query, conn, params=params if params else None)
-
-def exportar_para_excel(df, nome_arquivo):
+def get_dre_data(data_inicio, data_fim):
     """
-    Exporta um DataFrame para Excel.
-    
-    Args:
-        df: DataFrame do pandas
-        nome_arquivo: Nome do arquivo (sem extensão)
-    
-    Returns:
-        Caminho do arquivo criado
+    Busca dados financeiros para geração do DRE (Demonstrativo de Resultado).
     """
     try:
-        caminho = f"relatorios/{nome_arquivo}.xlsx"
-        os.makedirs("relatorios", exist_ok=True)
-        df.to_excel(caminho, index=False, engine='openpyxl')
-        logger.info(f"Relatório exportado: {caminho}")
-        return caminho
+        with get_connection() as conn:
+            query = """
+                SELECT 
+                    tipo,
+                    categoria,
+                    SUM(valor) as total
+                FROM financeiro
+                WHERE status_pagamento = 'Pago'
+                AND data BETWEEN ? AND ?
+                GROUP BY tipo, categoria
+                ORDER BY tipo, total DESC
+            """
+            return pd.read_sql_query(query, conn, params=(str(data_inicio), str(data_fim)))
     except Exception as e:
-        logger.error(f"Erro ao exportar Excel: {e}")
-        raise
+        logger.error(f"Erro ao buscar dados DRE: {e}")
+        return pd.DataFrame(columns=['tipo', 'categoria', 'total'])
 
-def exportar_backup_completo():
-    """Cria backup completo de todas as tabelas em SQLite e CSV."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_dir = f"backups/completo_{timestamp}"
-    os.makedirs(backup_dir, exist_ok=True)
-    
-    # Backup do SQLite
-    criar_backup()
-    
-    # Exportar cada tabela para CSV
-    with get_connection() as conn:
-        for tabela in TABELAS_VALIDAS:
-            try:
-                df = pd.read_sql(f"SELECT * FROM {tabela}", conn)
-                df.to_csv(f"{backup_dir}/{tabela}.csv", index=False)
-                logger.info(f"Tabela '{tabela}' exportada para CSV")
-            except Exception as e:
-                logger.error(f"Erro ao exportar tabela '{tabela}': {e}")
-    
-    return f"Backup completo criado em: {backup_dir}"
-
-# --- LÓGICA DE NEGÓCIO FASE 3 (FINANCEIRO) ---
-
-def gerar_parcelas(id_financeiro_pai, num_parcelas, valor_total, data_inicio):
+def get_rentabilidade_clientes(data_inicio, data_fim):
     """
-    Gera N parcelas para um lançamento financeiro.
-    
-    Args:
-        id_financeiro_pai: ID do lançamento original (Entrada/Saída)
-        num_parcelas: Número total de parcelas
-        valor_total: Valor total a ser parcelado
-        data_inicio: Data da primeira parcela (string YYYY-MM-DD)
+    Calcula a rentabilidade por cliente no período especificado.
     """
-    # CORREÇÃO M5: Validação para evitar divisão por zero
-    if num_parcelas <= 0:
-        logger.error(f"Numero de parcelas invalido: {num_parcelas}")
-        raise ValueError("Numero de parcelas deve ser maior que zero")
-    
-    valor_parcela = round(valor_total / num_parcelas, 2)
-    # Ajuste de centavos na última parcela
-    diferenca = round(valor_total - (valor_parcela * num_parcelas), 2)
-    
-    dt_obj = datetime.strptime(data_inicio, "%Y-%m-%d")
-    
-    with get_connection() as conn:
-        c = conn.cursor()
-        for i in range(1, num_parcelas + 1):
-            vencimento = dt_obj.strftime("%Y-%m-%d")
-            valor_atual = valor_parcela
-            if i == num_parcelas:
-                valor_atual += diferenca
+    try:
+        with get_connection() as conn:
+            query = """
+                SELECT 
+                    c.nome as cliente,
+                    COALESCE(SUM(CASE WHEN f.tipo = 'Entrada' AND f.status_pagamento = 'Pago' THEN f.valor ELSE 0 END), 0) as receita,
+                    COALESCE(SUM(CASE WHEN f.tipo = 'Saída' AND f.status_pagamento = 'Pago' THEN f.valor ELSE 0 END), 0) as despesa,
+                    (COALESCE(SUM(CASE WHEN f.tipo = 'Entrada' AND f.status_pagamento = 'Pago' THEN f.valor ELSE 0 END), 0) - 
+                     COALESCE(SUM(CASE WHEN f.tipo = 'Saída' AND f.status_pagamento = 'Pago' THEN f.valor ELSE 0 END), 0)) as lucro
+                FROM clientes c
+                LEFT JOIN financeiro f ON c.id = f.id_cliente
+                WHERE f.data BETWEEN ? AND ?
+                GROUP BY c.id, c.nome
+                HAVING receita > 0
+            """
+            df = pd.read_sql_query(query, conn, params=(str(data_inicio), str(data_fim)))
             
-            c.execute('''
-                INSERT INTO parcelamentos (id_lancamento_financeiro, numero_parcela, total_parcelas, valor_parcela, vencimento, status_parcela)
-                VALUES (?, ?, ?, ?, ?, 'pendente')
-            ''', (id_financeiro_pai, i, num_parcelas, valor_atual, vencimento))
+            # Calcular margem percentual
+            if not df.empty:
+                df['margem'] = (df['lucro'] / df['receita'] * 100).round(1)
+                df = df.sort_values('lucro', ascending=False)
             
-            # Incrementar mês (lógica simplificada, ideal usar dateutil.relativedelta)
-            # Aqui vamos adicionar 30 dias para simplificar
-            from datetime import timedelta
-            dt_obj += timedelta(days=30)
-        
-        conn.commit()
-        logger.info(f"Geradas {num_parcelas} parcelas para lançamento ID {id_financeiro_pai}")
-
-def processar_repasse(id_financeiro):
-    """
-    Verifica se um lançamento pago tem parceiro e gera a saída correspondente.
-    Deve ser chamado quando um status muda para 'Pago'.
-    """
-    with get_connection() as conn:
-        c = conn.cursor()
-        # Buscar dados do lançamento
-        row = c.execute("SELECT * FROM financeiro WHERE id = ?", (id_financeiro,)).fetchone()
-        
-        if row and row['status_pagamento'] == 'Pago' and row['tipo'] == 'Entrada':
-            # Verificar se tem parceiro vinculado diretamente ou via processo
-            id_parceiro = row.get('id_parceiro')
-            perc = row.get('percentual_parceria')
-            
-            # Se não tiver direto, tentar buscar do processo
-            if not id_parceiro and row.get('id_processo'):
-                proc = c.execute("SELECT parceiro_nome, parceiro_percentual FROM processos WHERE id = ?", (row['id_processo'],)).fetchone()
-                if proc and proc['parceiro_nome']:
-                    # Aqui precisaria resolver o ID do parceiro pelo nome, mas vamos assumir que o nome basta para o histórico
-                    # Para simplificar, vamos usar o nome do parceiro na descrição
-                    nome_parceiro = proc['parceiro_nome']
-                    perc = proc['parceiro_percentual']
-            else:
-                # Tentar buscar nome do parceiro se tiver ID (assumindo tabela clientes/parceiros)
-                # Por enquanto, se tiver ID, vamos usar um placeholder
-                nome_parceiro = f"Parceiro ID {id_parceiro}" if id_parceiro else None
-
-            if perc and perc > 0:
-                valor_repasse = row['valor'] * (perc / 100)
-                descricao_repasse = f"Repasse de Parceria - {row['descricao']} ({perc}%)"
-                
-                # Verificar se já existe repasse para este lançamento para evitar duplicidade
-                existe = c.execute("SELECT id FROM financeiro WHERE descricao = ? AND valor = ? AND tipo = 'Saída'", (descricao_repasse, valor_repasse)).fetchone()
-                
-                if not existe:
-                    c.execute('''
-                        INSERT INTO financeiro (data, tipo, categoria, descricao, valor, responsavel, status_pagamento, vencimento)
-                        VALUES (?, 'Saída', 'Comissão Parceria', ?, ?, ?, 'Pendente', ?)
-                    ''', (datetime.now().strftime("%Y-%m-%d"), descricao_repasse, valor_repasse, 'Sistema', datetime.now().strftime("%Y-%m-%d")))
-                    conn.commit()
-                    logger.info(f"Repasse gerado automaticamente: {descricao_repasse}")
-                    return True
-    return False
-
-def verificar_recorrencia():
-    """
-    Verifica lançamentos recorrentes e gera novos para o mês atual se necessário.
-    (Implementação futura - Placeholder)
-    """
-    pass
-
-# --- LÓGICA DE NEGÓCIO FASE 4 (COMERCIAL) ---
+            return df
+    except Exception as e:
+        logger.error(f"Erro ao calcular rentabilidade de clientes: {e}")
+        return pd.DataFrame(columns=['cliente', 'receita', 'despesa', 'lucro', 'margem'])
 
 def get_modelos_proposta():
     """Busca todos os modelos de proposta cadastrados."""
     with get_connection() as conn:
         return pd.read_sql_query("SELECT * FROM modelos_proposta ORDER BY nome_modelo ASC", conn)
 
-def salvar_modelo_proposta(nome, texto, descricao="", valor=0.0):
-    """Salva ou atualiza um modelo de proposta."""
-    with get_connection() as conn:
-        c = conn.cursor()
-        # Verificar se já existe
-        existe = c.execute("SELECT id FROM modelos_proposta WHERE nome_modelo = ?", (nome,)).fetchone()
-        
-        if existe:
-            c.execute("UPDATE modelos_proposta SET descricao_padrao=?, valor_sugerido=?, area_atuacao=? WHERE id=?",
-                      (texto, valor, descricao, existe['id']))
-            logger.info(f"Modelo '{nome}' atualizado.")
-        else:
-            c.execute("INSERT INTO modelos_proposta (nome_modelo, descricao_padrao, valor_sugerido, area_atuacao) VALUES (?, ?, ?, ?)",
-                      (nome, texto, valor, descricao))
-            logger.info(f"Modelo '{nome}' criado.")
-
 def gerar_proposta_texto(id_modelo, dados_cliente):
     """
     Gera o texto da proposta substituindo placeholders pelos dados do cliente.
-    
-    Args:
-        id_modelo: ID do modelo na tabela modelos_proposta
-        dados_cliente: Dict ou Series com dados do cliente (nome, cpf, etc)
-    
-    Returns:
-        String com o texto formatado
     """
     with get_connection() as conn:
         modelo = conn.execute("SELECT * FROM modelos_proposta WHERE id = ?", (id_modelo,)).fetchone()

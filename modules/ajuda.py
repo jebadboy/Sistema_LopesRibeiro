@@ -44,7 +44,7 @@ def render_quick_start():
     
     #### 1️⃣ Login no Sistema
     - **Usuário padrão:** `admin`
-    - **Senha padrão:** `admin123`
+    - **Senha padrão:** `admin`
     - ⚠️ **Importante:** Altere a senha após o primeiro acesso em *Administração*
     
     #### 2️⃣ Navegação
@@ -244,65 +244,86 @@ def render_guide_processos():
 def render_guide_financeiro():
     st.markdown("### 💰 Módulo Financeiro")
     
-    with st.expander("➕ Registrar Lançamento"):
-        st.markdown("""
-        1. Clique em **"Novo Lançamento"**
-        2. Escolha o **Tipo**:
-           - 📈 **Entrada**: Honorários, recebimentos
-           - 📉 **Saída**: Custas, despesas, repasses
-        3. Preencha:
-           - Data
-           - Categoria
-           - Descrição
-           - Valor
-           - Vencimento
-        4. Salvar
-        """)
+    st.markdown("""
+    O novo módulo financeiro foi totalmente reformulado para oferecer **inteligência e agilidade**.
+    """)
     
-    with st.expander("💳 Categorias Recomendadas"):
+    with st.expander("📊 Dashboard Financeiro"):
         st.markdown("""
-        **Entradas:**
-        - Honorários Contratuais
-        - Honorários Êxito
-        - Consultoria
+        No topo da tela, você encontra os **Big Numbers**:
+        - **Saldo do Mês**: Quanto sobrou no caixa (Entradas Pagas - Saídas Pagas).
+        - **Previsão**: Quanto você deve fechar o mês (considerando o que ainda vai vencer).
+        - **Inadimplência**: Total de valores atrasados.
         
-        **Saídas:**
-        - Custas Processuais
-        - Comissão Parceria
-        - Infraestrutura
-        - Pessoal
+        O gráfico de **Fluxo de Caixa** mostra a evolução dos últimos 6 meses.
         """)
     
-    with st.expander("📊 Controle de Pagamentos"):
+    with st.expander("➕ Lançamento Inteligente"):
+        st.markdown("""
+        O novo formulário se adapta ao que você precisa:
+        
+        1. **Parcelamento Automático**:
+           - Selecione "Entrada"
+           - Defina o número de parcelas (ex: 12x)
+           - O sistema cria 12 lançamentos futuros automaticamente!
+           
+        2. **Classificação Simplificada**:
+           - **Custo do Escritório**: Aluguel, luz, software (Despesas Fixas).
+           - **Adiantamento Cliente**: Custas pagas pelo escritório para reembolso (não afeta seu lucro).
+        """)
+    
+    with st.expander("💳 Controle de Pagamentos"):
         st.markdown("""
         - **Status**: Pago ou Pendente
         - **Filtrar por status** para ver inadimplência
-        - **Vincular ao cliente** para relatórios
+        - **Vincular ao cliente** para relatórios de rentabilidade
         """)
 
 def render_guide_relatorios():
     st.markdown("### 📈 Relatórios e Análises")
     
     st.markdown("""
-    O módulo de Relatórios oferece **3 visões estratégicas**:
+    Agora você conta com relatórios de nível de consultoria financeira.
     
-    #### 💰 Aba Financeiro
-    - **Fluxo de Caixa**: Gráfico de entradas vs saídas
-    - **KPIs**: Totais realizados e a receber
-    - **Inadimplência**: Lista de pendências com link WhatsApp
-    
-    #### ⚖️ Aba Operacional
-    - **Distribuição de Processos**: Por responsável
-    - **Prazos Fatais**: Próximos 15 dias
-    - **Produtividade**: Métricas por advogado
-    
-    #### 🤝 Aba Comercial
-    - **Funil de Vendas**: Status dos clientes
-    - **Propostas Abertas**: Total em negociação
-    - **Taxa de Conversão**: Análise de fechamento
-    
-    > **💡 Dica**: Use para reuniões quinzenais
+    #### 📅 Funcionalidades Gerais
+    - **Filtros de Data**: Selecione qualquer período (Início e Fim) para análise.
+    - **Exportação Excel**: Botão "📥 Baixar Excel" em todas as tabelas.
     """)
+    
+    with st.expander("📈 DRE Gerencial"):
+        st.markdown("""
+        O **Demonstrativo de Resultado** mostra a saúde real do escritório:
+        
+        1. **Receita Bruta**: Tudo que entrou.
+        2. **(-) Despesas Variáveis**: Impostos e Comissões.
+        3. **(=) Margem de Contribuição**: O que sobra para pagar a estrutura.
+        4. **(-) Despesas Fixas**: Aluguel, pessoal, etc.
+        5. **(=) Lucro Líquido**: O dinheiro limpo no bolso.
+        
+        *Visualize no gráfico de cascata (waterfall).*
+        """)
+    
+    with st.expander("💎 Rentabilidade por Cliente"):
+        st.markdown("""
+        Descubra quais clientes dão lucro e quais dão prejuízo.
+        
+        - **Receita**: Honorários pagos pelo cliente.
+        - **Despesa**: Custos que você teve com ele (e não foram reembolsados).
+        - **Margem %**: A eficiência do contrato.
+        """)
+    
+    with st.expander("💰 Financeiro e Inadimplência"):
+        st.markdown("""
+        - **Fluxo de Caixa**: Gráfico de entradas vs saídas
+        - **Inadimplência**: Lista de clientes devedores com **Link direto para WhatsApp** de cobrança.
+        """)
+    
+    with st.expander("⚖️ Operacional e Comercial"):
+        st.markdown("""
+        - **Produtividade**: Processos por advogado.
+        - **Prazos Fatais**: Alertas para os próximos 15 dias.
+        - **Funil de Vendas**: Quantos clientes estão em negociação.
+        """)
 
 def render_guide_admin():
     st.markdown("### 🔐 Administração do Sistema")
@@ -426,7 +447,7 @@ def render_troubleshooting():
         
         1. **Senha incorreta**
            - Verifique Caps Lock
-           - Senha padrão: `admin123`
+           - Senha padrão: `admin`
         
         2. **Usuário desativado**
            - Contate o administrador

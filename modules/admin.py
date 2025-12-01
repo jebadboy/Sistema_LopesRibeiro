@@ -12,7 +12,30 @@ def render():
         render_usuarios()
     
     with tab2:
-        st.info("Configurações do escritório em breve.")
+        st.markdown("### 🏢 Dados do Escritório")
+        st.caption("Essas informações aparecerão automaticamente nos documentos gerados (Propostas, Procurações, etc).")
+        
+        with st.form("config_escritorio"):
+            c1, c2 = st.columns(2)
+            nome_adv = c1.text_input("Nome do Advogado(a) / Escritório", value=db.get_config('nome_escritorio', 'Dra. Sheila Lopes'))
+            oab = c2.text_input("OAB", value=db.get_config('oab', 'OAB/RJ nº 215691'))
+            
+            end = st.text_input("Endereço Completo", value=db.get_config('endereco_escritorio', 'Rodovia Amaral Peixoto km 22, nº 5, São José do Imbassaí, Maricá/RJ'))
+            
+            c3, c4 = st.columns(2)
+            tel = c3.text_input("Telefone / WhatsApp", value=db.get_config('telefone_escritorio', '(21) 97032-0748'))
+            email = c4.text_input("Email de Contato", value=db.get_config('email_escritorio', 'sheilaadv.contato@gmail.com'))
+            
+            if st.form_submit_button("Salvar Configurações", type="primary"):
+                try:
+                    db.set_config('nome_escritorio', nome_adv)
+                    db.set_config('oab', oab)
+                    db.set_config('endereco_escritorio', end)
+                    db.set_config('telefone_escritorio', tel)
+                    db.set_config('email_escritorio', email)
+                    st.success("Configurações atualizadas com sucesso!")
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
 
 def render_usuarios():
     st.markdown("### Gestão de Usuários")

@@ -36,15 +36,14 @@ def login():
             if submit:
                 senha_hash = hashlib.sha256(password.encode()).hexdigest()
                 # Verificar credenciais
-                df = db.sql_get("usuarios")
-                user_data = df[df['username'] == username]
+                user_data = db.get_usuario_by_username(username)
                 
-                if not user_data.empty:
-                    stored_hash = user_data.iloc[0]['password_hash']
-                    if senha_hash == stored_hash and user_data.iloc[0]['ativo'] == 1:
+                if user_data is not None:
+                    stored_hash = user_data['password_hash']
+                    if senha_hash == stored_hash and user_data['ativo'] == 1:
                         st.session_state.logged_in = True
-                        st.session_state.user = user_data.iloc[0]['nome']
-                        st.session_state.role = user_data.iloc[0]['role']
+                        st.session_state.user = user_data['nome']
+                        st.session_state.role = user_data['role']
                         st.success("Login realizado com sucesso!")
                         time.sleep(1)
                         st.rerun()

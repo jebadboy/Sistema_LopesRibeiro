@@ -3,32 +3,36 @@ import database as db
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
+import io
 
 def render():
     st.markdown("<h1 style='color: var(--text-main);'>📊 Relatórios e Inteligência</h1>", unsafe_allow_html=True)
     
     # Abas Principais
-    t1, t2, t3 = st.tabs(["💰 Financeiro", "⚖️ Operacional", "🤝 Comercial"])
+    t1, t2, t3, t4, t5 = st.tabs(["💰 Financeiro", "📈 DRE Gerencial", "💎 Rentabilidade", "⚖️ Operacional", "🤝 Comercial"])
     
     # --- ABA 1: FINANCEIRO ---
     with t1:
         render_financeiro()
 
-    # --- ABA 2: OPERACIONAL ---
+    # --- ABA 2: DRE GERENCIAL ---
     with t2:
+        render_dre()
+
+    # --- ABA 3: RENTABILIDADE ---
+    with t3:
+        render_rentabilidade()
+
+    # --- ABA 4: OPERACIONAL ---
+    with t4:
         render_operacional()
 
-    # --- ABA 3: COMERCIAL ---
-    with t3:
+    # --- ABA 5: COMERCIAL ---
+    with t5:
         render_comercial()
 
 def render_financeiro():
     st.markdown("### Fluxo de Caixa")
-    
-    # Filtros
-    c1, c2 = st.columns(2)
-    mes_atual = datetime.now().month
-    ano_atual = datetime.now().year
     
     # Dados
     df = db.sql_get("financeiro")
@@ -66,35 +70,138 @@ def render_financeiro():
     df_inad = db.relatorio_inadimplencia()
     
     if not df_inad.empty:
-        # Calcular Total
-        total_inad = df_inad['Valor'].sum()
+        total_inad = df_inad['Valor'].sum() if 'Valor' in df_inad.columns else df_inad['valor'].sum()
         st.metric("Total em Atraso", f"R$ {total_inad:,.2f}", delta_color="inverse")
-        
-        # Gerar Link WhatsApp
-        # Formato: https://wa.me/5511999999999?text=Mensagem
-        def gerar_link_wpp(row):
-            tel = row['WhatsApp']
-            if not tel: return None
-            tel_limpo = ''.join(filter(str.isdigit, str(tel)))
-            msg = f"Olá {row['Cliente']}, verificamos uma pendência referente a {row['Descrição']} vencida em {row['Vencimento']}. Podemos ajudar?"
-            return f"https://wa.me/55{tel_limpo}?text={msg}"
-
-        df_inad['Link Cobrança'] = df_inad.apply(gerar_link_wpp, axis=1)
         
         st.dataframe(
             df_inad, 
             use_container_width=True,
             column_config={
-                "Link Cobrança": st.column_config.LinkColumn(
-                    "Cobrar", display_text="📲 Enviar Zap"
-                ),
-                "Valor": st.column_config.NumberColumn(
-                    "Valor", format="R$ %.2f"
-                )
+                "valor": st.column_config.NumberColumn("Valor", format="R$ %.2f")
             }
         )
     else:
         st.success("Nenhuma inadimplência detectada! Parabéns.")
+
+def render_dre():
+    st.markdown("### Demonstrativo de Resultado (Gerencial)")
+    
+    # Filtro de Data
+    col_d1, col_d2 = st.columns(2)
+    hoje = datetime.now()
+    inicio_mes = hoje.replace(day=1)
+    
+    data_inicio = col_d1.date_input("Data Início", inicio_mes)
+    data_fim = col_d2.date_input("Data Fim", hoje)
+    
+    if data_inicio > data_fim:
+        st.error("Data de início não pode ser maior que data fim.")
+        return
+
+    df_dre = db.get_dre_data(data_inicio, data_fim)
+    
+    if df_dre.empty:
+        st.warning(f"Sem dados financeiros finalizados para o período selecionado.")
+        return
+        
+    # Estrutura do DRE
+    receita_bruta = df_dre[df_dre['tipo'] == 'Entrada']['total'].sum()
+    
+    # Despesas Variáveis (Impostos, Comissões)
+    desp_var = df_dre[(df_dre['tipo'] == 'Saída') & (df_dre['categoria'].isin(['Impostos', 'Comissão Parceria']))]['total'].sum()
+    
+    margem_contrib = receita_bruta - desp_var
+    
+    # Despesas Fixas (Todas as outras saídas)
+    desp_fixa = df_dre[(df_dre['tipo'] == 'Saída') & (~df_dre['categoria'].isin(['Impostos', 'Comissão Parceria']))]['total'].sum()
+    
+    lucro_liquido = margem_contrib - desp_fixa
+    
+    # Visualização em Cascata
+    fig = px.waterfall(
+        orientation = "v",
+        measure = ["relative", "relative", "total", "relative", "total"],
+        x = ["Receita Bruta", "Despesas Variáveis", "Margem Contribuição", "Despesas Fixas", "Lucro Líquido"],
+        textposition = "outside",
+        y = [receita_bruta, -desp_var, margem_contrib, -desp_fixa, lucro_liquido],
+        connector = {"line":{"color":"rgb(63, 63, 63)"}},
+    )
+    fig.update_layout(title=f"DRE Cascata ({data_inicio} a {data_fim})")
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Tabela Detalhada com Exportação
+    st.markdown("#### Detalhamento por Categoria")
+    
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.dataframe(df_dre.sort_values(by='total', ascending=False), use_container_width=True, column_config={"total": st.column_config.NumberColumn(format="R$ %.2f")})
+    
+    with c2:
+        # Exportação Excel
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df_dre.to_excel(writer, sheet_name='DRE', index=False)
+            
+        st.download_button(
+            label="📥 Baixar Excel",
+            data=buffer.getvalue(),
+            file_name=f"DRE_{data_inicio}_{data_fim}.xlsx",
+            mime="application/vnd.ms-excel"
+        )
+
+def render_rentabilidade():
+    st.markdown("### Rentabilidade por Cliente")
+    
+    # Filtro de Data
+    col_d1, col_d2 = st.columns(2)
+    hoje = datetime.now()
+    inicio_ano = hoje.replace(month=1, day=1)
+    
+    data_inicio = col_d1.date_input("Início", inicio_ano, key="rent_ini")
+    data_fim = col_d2.date_input("Fim", hoje, key="rent_fim")
+    
+    df_rent = db.get_rentabilidade_clientes(data_inicio, data_fim)
+    
+    if df_rent.empty:
+        st.info("Sem dados suficientes para cálculo de rentabilidade neste período.")
+        return
+        
+    # Top 5 Clientes Mais Rentáveis
+    top5 = df_rent.head(5)
+    
+    c1, c2 = st.columns([2, 1])
+    
+    with c1:
+        fig = px.bar(top5, x='cliente', y='lucro', title="Top 5 Clientes (Lucro)", text_auto='.2s')
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with c2:
+        st.markdown("**Resumo Geral**")
+        st.metric("Lucro Total Clientes", f"R$ {df_rent['lucro'].sum():,.2f}")
+        st.metric("Margem Média", f"{df_rent['margem'].mean():.1f}%")
+        
+        # Exportação Excel
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+            df_rent.to_excel(writer, sheet_name='Rentabilidade', index=False)
+            
+        st.download_button(
+            label="📥 Baixar Relatório",
+            data=buffer.getvalue(),
+            file_name=f"Rentabilidade_{data_inicio}_{data_fim}.xlsx",
+            mime="application/vnd.ms-excel"
+        )
+
+    st.dataframe(
+        df_rent,
+        use_container_width=True,
+        column_config={
+            "receita": st.column_config.NumberColumn(format="R$ %.2f"),
+            "despesa": st.column_config.NumberColumn(format="R$ %.2f"),
+            "lucro": st.column_config.NumberColumn(format="R$ %.2f"),
+            "margem": st.column_config.ProgressColumn("Margem %", format="%.1f%%", min_value=-100, max_value=100)
+        }
+    )
 
 def render_operacional():
     st.markdown("### Produtividade e Prazos")
