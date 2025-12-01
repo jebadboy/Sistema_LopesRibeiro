@@ -44,7 +44,9 @@ def render_novo_processo():
             
         cl = st.selectbox("Cliente", lista_clientes, index=idx_cli)
         ac = st.text_input("Ação / Número do Processo")
-        pz = st.date_input("Prazo Fatal", value=vc)
+        c_fase, c_prazo = st.columns(2)
+        fase = c_fase.selectbox("Fase Inicial", ["A Ajuizar", "Aguardando Liminar", "Audiência Marcada", "Sentença", "Arquivado", "Em Andamento"])
+        pz = c_prazo.date_input("Prazo Fatal", value=vc)
         resp = st.selectbox("Responsável", ["Eduardo", "Sheila"])
         
         if st.form_submit_button("Salvar Processo", type="primary"):
@@ -52,8 +54,8 @@ def render_novo_processo():
                 st.error("Cliente e Ação são obrigatórios.")
             else:
                 db.sql_run(
-                    "INSERT INTO processos (cliente_nome,acao,proximo_prazo,responsavel,status) VALUES (?,?,?,?,?)",
-                    (cl, ac, pz, resp, "Ativo")
+                    "INSERT INTO processos (cliente_nome,acao,proximo_prazo,responsavel,status,fase_processual) VALUES (?,?,?,?,?,?)",
+                    (cl, ac, pz, resp, "Ativo", fase)
                 )
                 st.success("Processo salvo com sucesso!")
 
@@ -63,14 +65,47 @@ def render_gerenciar_processos():
         st.info("Nenhum processo cadastrado.")
         return
 
-    # Aplicar Farol
-    df['Farol'] = df['proximo_prazo'].apply(ut.calcular_farol)
+    # KANBAN BOARD
+    st.markdown("### 📋 Quadro de Processos (Kanban)")
     
-    st.dataframe(
-        df[['Farol', 'cliente_nome', 'acao', 'proximo_prazo', 'responsavel']], 
-        use_container_width=True,
-        hide_index=True
-    )
+    fases = ["A Ajuizar", "Aguardando Liminar", "Audiência Marcada", "Sentença", "Arquivado"]
+    cols = st.columns(len(fases))
+    
+    # Garantir que todos os processos tenham fase (para legados)
+    df['fase_processual'] = df['fase_processual'].fillna("A Ajuizar")
+    
+    for i, fase in enumerate(fases):
+        with cols[i]:
+            st.markdown(f"**{fase}**")
+            df_fase = df[df['fase_processual'] == fase]
+            
+            for idx, row in df_fase.iterrows():
+                # Card do Processo
+                with st.container(border=True):
+                    st.markdown(f"**{row['cliente_nome']}**")
+                    st.caption(f"{row['acao']}")
+                    
+                    # Farol
+                    farol = ut.calcular_farol(row['proximo_prazo'])
+                    st.caption(f"{farol} {datetime.strptime(row['proximo_prazo'], '%Y-%m-%d').strftime('%d/%m')}")
+                    
+                    # Mover
+                    nova_fase = st.selectbox("Mover:", fases, index=fases.index(fase), key=f"mv_{row['id']}", label_visibility="collapsed")
+                    
+                    if nova_fase != fase:
+                        db.sql_run("UPDATE processos SET fase_processual=? WHERE id=?", (nova_fase, row['id']))
+                        st.toast(f"Processo movido para {nova_fase}")
+                        st.rerun()
+                        
+    st.divider()
+    
+    # VISÃO EM LISTA (Opcional, para quem prefere)
+    with st.expander("🔎 Visão em Lista (Tabela)"):
+        st.dataframe(
+            df[['cliente_nome', 'acao', 'fase_processual', 'proximo_prazo', 'responsavel']], 
+            use_container_width=True,
+            hide_index=True
+        )
     
     st.divider()
     st.markdown("### 📝 Andamentos")

@@ -288,15 +288,29 @@ def render_ficha_cliente(dd):
                 type="secondary"
             )
 
-    # MODO DOCS FINAIS
-    if dd['status_cliente'] == 'ATIVO':
-        st.markdown("### 🖨️ Documentos Finais")
+    # MODO DOCUMENTAÇÃO (Visível para ATIVO e EM NEGOCIAÇÃO)
+    if dd['status_cliente'] in ['ATIVO', 'EM NEGOCIAÇÃO']:
+        st.markdown("### 📄 Documentação e Modelos")
         
         with st.container(border=True):
-            st.markdown("#### 📄 Procuração e Hipossuficiência")
+            # --- MODELOS DE REFERÊNCIA ---
+            link_proc_modelo = db.get_config('link_modelo_procuracao')
+            link_hipo_modelo = db.get_config('link_modelo_hipossuficiencia')
+            
+            if link_proc_modelo or link_hipo_modelo:
+                st.markdown("#### 📂 Modelos de Referência (Google Drive)")
+                cm1, cm2 = st.columns(2)
+                if link_proc_modelo:
+                    cm1.link_button("📄 Modelo PROCURAÇÃO", link_proc_modelo, use_container_width=True)
+                if link_hipo_modelo:
+                    cm2.link_button("📄 Modelo HIPO", link_hipo_modelo, use_container_width=True)
+                st.divider()
+
+            # --- GERADOR DE DOCUMENTOS ---
+            st.markdown("#### 📝 Gerar Documentos")
             
             # --- PROCURAÇÃO ---
-            with st.expander("Procuração", expanded=True):
+            with st.expander("Procuração", expanded=False):
                 c_proc1, c_proc2 = st.columns([1, 2])
                 
                 # Opções
@@ -305,14 +319,13 @@ def render_ficha_cliente(dd):
                 # Botão Gerar
                 if c_proc1.button("📄 Gerar Procuração (DOC)", key="btn_gerar_proc"):
                     dados_proc = dd.copy()
-                    # Adicionar endereço completo se faltar
                     doc_bytes = ut.criar_doc("Procuracao", dados_proc, opcoes={'poderes_especiais': pod_esp})
                     st.download_button(
                         label="⬇️ Baixar Procuração",
                         data=doc_bytes,
                         file_name=f"Procuracao_{dd['nome']}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key="down_proc"
+                        key="down_proc_generated"
                     )
                 
                 # Link Drive
@@ -329,7 +342,7 @@ def render_ficha_cliente(dd):
                     c_act2.link_button("📂 Abrir no Drive", link_proc_atual)
 
             # --- HIPOSSUFICIÊNCIA ---
-            with st.expander("Declaração de Hipossuficiência", expanded=True):
+            with st.expander("Declaração de Hipossuficiência", expanded=False):
                 c_hip1, c_hip2 = st.columns([1, 2])
                 
                 # Botão Gerar
@@ -340,7 +353,7 @@ def render_ficha_cliente(dd):
                         data=doc_bytes,
                         file_name=f"Hipossuficiencia_{dd['nome']}.docx",
                         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        key="down_hipo"
+                        key="down_hipo_generated"
                     )
                 
                 # Link Drive
@@ -356,27 +369,17 @@ def render_ficha_cliente(dd):
                 if link_hipo_atual:
                     c_act4.link_button("📂 Abrir no Drive", link_hipo_atual)
             
-            st.divider()
-            
-            d1, d2, d3 = st.columns(3)
-            
-            # Procuração com Opções
-            with d1: 
-                doc_proc = ut.criar_doc("Procuracao", dd, opcoes={'poderes_especiais': pod_esp})
-                st.download_button("📄 Baixar Procuração", doc_proc, f"Procuracao_{dd['nome']}.docx", use_container_width=True)
-            
-            # Hipossuficiência
-            with d2: 
-                if just_grat:
-                    doc_hipo = ut.criar_doc("Hipossuficiencia", dd)
-                    st.download_button("📄 Baixar Hipossuf.", doc_hipo, f"Hipo_{dd['nome']}.docx", use_container_width=True)
-                else:
-                    st.caption("Hipossuficiência não selecionada")
-            
-            # Contrato
-            with d3: 
-                doc_cont = ut.criar_doc("Contrato", dd)
-                st.download_button("📄 Baixar Contrato", doc_cont, f"Contrato_{dd['nome']}.docx", use_container_width=True)
+            # --- CONTRATO ---
+            with st.expander("Contrato de Honorários", expanded=False):
+                 if st.button("📄 Gerar Contrato (DOC)", key="btn_gerar_contrato"):
+                    doc_cont = ut.criar_doc("Contrato", dd)
+                    st.download_button(
+                        label="⬇️ Baixar Contrato",
+                        data=doc_cont,
+                        file_name=f"Contrato_{dd['nome']}.docx",
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        key="down_contrato_generated"
+                    )
 
     # HISTÓRICO FINANCEIRO
     with st.expander("💰 Histórico Financeiro"):

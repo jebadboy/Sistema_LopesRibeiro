@@ -65,12 +65,12 @@ def create_backup():
         # 4. Limpeza (Opcional: remover pasta descompactada se quiser apenas o zip)
         # shutil.rmtree(backup_path) 
         
-        print(f"\n✅ SUCESSO! Ponto de recuperação criado em: {zip_filename}.zip")
+        print(f"\n[SUCESSO] Ponto de recuperacao criado em: {zip_filename}.zip")
         return True
         
     except Exception as e:
-        logger.error(f"❌ Falha ao criar backup: {e}")
-        print(f"\n❌ ERRO: Falha ao criar backup. Verifique o log.")
+        logger.error(f"Falha ao criar backup: {e}")
+        print(f"\n[ERRO] Falha ao criar backup. Verifique o log.")
         return False
 
 if __name__ == "__main__":

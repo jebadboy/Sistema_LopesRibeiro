@@ -5,18 +5,18 @@ import hashlib
 import time
 
 # Importar Módulos
-from modules import clientes, financeiro, processos, dashboard, admin, relatorios, ajuda
+from modules import clientes, financeiro, processos, dashboard, admin, relatorios, ajuda, agenda
 
 # --- CONFIGURAÇÃO INICIAL ---
 st.set_page_config(page_title="Lopes & Ribeiro System", page_icon="⚖️", layout="wide")
 
-# Carregar CSS Global
 def load_css():
     with open("styles.css", "r") as f:
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 load_css()
 db.init_db()
+db.criar_backup()
 
 # --- GESTÃO DE SESSÃO ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
@@ -72,6 +72,7 @@ else:
             "Painel Geral": dashboard,
             "Clientes (CRM)": clientes,
             "Processos": processos,
+            "📅 Agenda": agenda,
             "Financeiro": financeiro,
             "Relatórios": relatorios,
             "📚 Ajuda": ajuda
@@ -90,9 +91,15 @@ else:
         if st.button("Sair / Logout", use_container_width=True):
             logout()
             
-        st.caption("v2.1 - Modular & Seguro")
+        st.caption("v2.2 - Agenda Integrada")
 
-    # --- ROTEAMENTO ---
+    # --- ROTEAMENTO COM ESCUDO DE ERROS ---
     if selection in menu_options:
-        module = menu_options[selection]
-        module.render()
+        try:
+            module = menu_options[selection]
+            module.render()
+        except Exception as e:
+            st.error("Ocorreu um erro inesperado ao carregar este módulo.")
+            st.warning(f"Detalhes do erro: {e}")
+            # Em produção, você registraria isso em um log silencioso
+            # logger.error(f"Erro no módulo {selection}: {e}")

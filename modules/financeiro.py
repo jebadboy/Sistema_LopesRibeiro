@@ -25,7 +25,7 @@ def render_dashboard_header():
     df = db.sql_get("financeiro")
     
     if df.empty:
-        st.info("Comece lançando suas receitas e despesas para ver o dashboard.")
+        st.info("👋 Bem-vindo ao seu Financeiro! Comece lançando sua primeira receita ou despesa na aba abaixo para ver os indicadores.")
         return
 
     # Converter colunas de data
@@ -208,7 +208,7 @@ def render_extrato_lista():
     df = db.sql_get("financeiro", "vencimento DESC")
     
     if df.empty:
-        st.info("Nenhum registro encontrado.")
+        st.info("📭 Nenhum lançamento encontrado para os filtros selecionados.")
         return
         
     # Filtros

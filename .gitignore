@@ -13,3 +13,9 @@ create_postgres_schema.py
 add_*.py
 fix_*.py
 migrate_*.py
+
+# Google Calendar - Credenciais e Tokens
+credentials.json
+token*.pickle
+token*.json
+client_secret*.json

@@ -163,6 +163,13 @@ def init_db():
             # Inicializar tabelas v2
             inicializar_tabelas_v2()
             
+            # Inicializar tabela de tokens públicos
+            try:
+                import token_manager
+                token_manager.inicializar_tabela_tokens()
+            except Exception as e:
+                logger.warning(f"Erro ao inicializar tokens públicos: {e}")
+            
     except Exception as e:
         logger.error(f"Erro ao inicializar banco de dados: {e}")
         raise

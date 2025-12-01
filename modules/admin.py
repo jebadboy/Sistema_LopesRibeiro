@@ -26,6 +26,12 @@ def render():
             tel = c3.text_input("Telefone / WhatsApp", value=db.get_config('telefone_escritorio', '(21) 97032-0748'))
             email = c4.text_input("Email de Contato", value=db.get_config('email_escritorio', 'sheilaadv.contato@gmail.com'))
             
+            st.markdown("---")
+            st.markdown("### 📄 Links de Modelos (Google Drive)")
+            l1, l2 = st.columns(2)
+            link_proc = l1.text_input("Link Modelo Procuração", value=db.get_config('link_modelo_procuracao', ''))
+            link_hipo = l2.text_input("Link Modelo Hipossuficiência", value=db.get_config('link_modelo_hipossuficiencia', ''))
+            
             if st.form_submit_button("Salvar Configurações", type="primary"):
                 try:
                     db.set_config('nome_escritorio', nome_adv)
@@ -33,6 +39,8 @@ def render():
                     db.set_config('endereco_escritorio', end)
                     db.set_config('telefone_escritorio', tel)
                     db.set_config('email_escritorio', email)
+                    db.set_config('link_modelo_procuracao', link_proc)
+                    db.set_config('link_modelo_hipossuficiencia', link_hipo)
                     st.success("Configurações atualizadas com sucesso!")
                 except Exception as e:
                     st.error(f"Erro ao salvar: {e}")
