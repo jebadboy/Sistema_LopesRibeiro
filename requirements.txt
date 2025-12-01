@@ -11,3 +11,5 @@ google-api-python-client
 google-auth-httplib2
 google-auth-oauthlib
 streamlit-calendar
+google-generativeai
+python-dotenv

@@ -3,6 +3,8 @@ import database as db
 import pandas as pd
 import hashlib
 
+import os
+
 def render():
     st.markdown("<h1 style='color: var(--text-main);'>⚙️ Administração</h1>", unsafe_allow_html=True)
     
@@ -15,10 +17,34 @@ def render():
         st.markdown("### 🏢 Dados do Escritório")
         st.caption("Essas informações aparecerão automaticamente nos documentos gerados (Propostas, Procurações, etc).")
         
+        # Upload de Logo
+        st.markdown("#### Logotipo")
+        col_logo_curr, col_logo_up = st.columns([1, 2])
+        
+        logo_path = "LOGO.jpg" # Padrão ou salvo
+        if os.path.exists(logo_path):
+            col_logo_curr.image(logo_path, caption="Logo Atual", width=150)
+        else:
+            col_logo_curr.info("Sem logo definido")
+            
+        uploaded_logo = col_logo_up.file_uploader("Alterar Logotipo (JPG/PNG)", type=['png', 'jpg', 'jpeg'])
+        
+        if uploaded_logo is not None:
+            try:
+                with open(logo_path, "wb") as f:
+                    f.write(uploaded_logo.getbuffer())
+                st.success("Logotipo atualizado com sucesso! Recarregue a página para ver.")
+            except Exception as e:
+                st.error(f"Erro ao salvar logo: {e}")
+        
+        st.markdown("---")
+        
         with st.form("config_escritorio"):
             c1, c2 = st.columns(2)
-            nome_adv = c1.text_input("Nome do Advogado(a) / Escritório", value=db.get_config('nome_escritorio', 'Dra. Sheila Lopes'))
-            oab = c2.text_input("OAB", value=db.get_config('oab', 'OAB/RJ nº 215691'))
+            nome_escritorio = c1.text_input("Nome do Escritório", value=db.get_config('nome_escritorio', 'Lopes & Ribeiro Advogados'))
+            nome_adv = c2.text_input("Nome do Advogado(a) (Para Relatórios)", value=db.get_config('nome_advogado_relatorios', 'Dra. Sheila Lopes'))
+            
+            oab = st.text_input("OAB", value=db.get_config('oab', 'OAB/RJ nº 215691'))
             
             end = st.text_input("Endereço Completo", value=db.get_config('endereco_escritorio', 'Rodovia Amaral Peixoto km 22, nº 5, São José do Imbassaí, Maricá/RJ'))
             
@@ -34,7 +60,8 @@ def render():
             
             if st.form_submit_button("Salvar Configurações", type="primary"):
                 try:
-                    db.set_config('nome_escritorio', nome_adv)
+                    db.set_config('nome_escritorio', nome_escritorio)
+                    db.set_config('nome_advogado_relatorios', nome_adv)
                     db.set_config('oab', oab)
                     db.set_config('endereco_escritorio', end)
                     db.set_config('telefone_escritorio', tel)
@@ -42,6 +69,7 @@ def render():
                     db.set_config('link_modelo_procuracao', link_proc)
                     db.set_config('link_modelo_hipossuficiencia', link_hipo)
                     st.success("Configurações atualizadas com sucesso!")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao salvar: {e}")
 

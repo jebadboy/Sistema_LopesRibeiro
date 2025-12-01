@@ -1,19 +1,3 @@
-import streamlit as st
-import database as db
-import utils as ut
-import hashlib
-import time
-
-# Importar Módulos
-from modules import clientes, financeiro, processos, dashboard, admin, relatorios, ajuda, agenda
-
-# --- CONFIGURAÇÃO INICIAL ---
-st.set_page_config(page_title="Lopes & Ribeiro System", page_icon="⚖️", layout="wide")
-
-def load_css():
-    with open("styles.css", "r") as f:
-        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
-
 load_css()
 db.init_db()
 db.criar_backup()
@@ -74,6 +58,7 @@ else:
             "Processos": processos,
             "📅 Agenda": agenda,
             "Financeiro": financeiro,
+            "🤖 IA Jurídica": ia_juridica,
             "Relatórios": relatorios,
             "📚 Ajuda": ajuda
         }

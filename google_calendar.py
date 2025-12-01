@@ -24,7 +24,7 @@ SCOPES = [
 ]
 
 CREDENTIALS_FILE = 'credentials.json'
-TOKEN_DIR = '.'
+TOKEN_DIR = os.getenv('DATA_DIR', '.')
 
 
 def get_token_file(username):

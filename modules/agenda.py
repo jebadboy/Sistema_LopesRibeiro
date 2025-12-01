@@ -235,7 +235,7 @@ def render_card_evento(evento):
             st.markdown(f"### {icone} {evento['titulo']}")
             st.caption(f"📅 {evento['data_evento']} | {status_icon} {evento['status'].upper()}")
             if evento.get('descricao'):
-                st.text(evento['descricao'])
+                st.markdown(evento['descricao'], unsafe_allow_html=True)
             if evento.get('responsavel'):
                 st.caption(f"👤 Responsável: {evento['responsavel']}")
         

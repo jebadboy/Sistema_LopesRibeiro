@@ -54,6 +54,7 @@ def render_quick_start():
     - ⚖️ **Processos** - Controle de processos jurídicos
     - 💰 **Financeiro** - Entradas, saídas e controle financeiro
     - 📈 **Relatórios** - Análises e dashboards
+    - 🤖 **IA Jurídica** - Assistente inteligente e análise de documentos
     - 🔐 **Administração** - Usuários e configurações (apenas admin)
     
     #### 3️⃣ Fluxo de Trabalho Recomendado
@@ -108,7 +109,7 @@ def render_module_guides():
     
     module = st.selectbox(
         "Selecione o módulo:",
-        ["Dashboard", "Clientes (CRM)", "Processos", "Financeiro", "Relatórios", "Administração"]
+        ["Dashboard", "Clientes (CRM)", "Processos", "Financeiro", "Relatórios", "IA Jurídica", "Administração"]
     )
     
     if module == "Dashboard":
@@ -121,6 +122,8 @@ def render_module_guides():
         render_guide_financeiro()
     elif module == "Relatórios":
         render_guide_relatorios()
+    elif module == "IA Jurídica":
+        render_guide_ia()
     elif module == "Administração":
         render_guide_admin()
 
@@ -325,6 +328,47 @@ def render_guide_relatorios():
         - **Funil de Vendas**: Quantos clientes estão em negociação.
         """)
 
+def render_guide_ia():
+    st.markdown("### 🤖 IA Jurídica Inteligente")
+    
+    st.markdown("""
+    O módulo de IA Jurídica atua como um **assistente virtual** para agilizar sua rotina, powered by Google Gemini.
+    """)
+    
+    with st.expander("💬 Chat Assistente"):
+        st.markdown("""
+        Converse naturalmente com a IA para:
+        - Tirar dúvidas jurídicas
+        - Pedir resumos de teses
+        - Solicitar modelos de peças
+        
+        **✨ Novidade:** Agora você pode baixar a resposta da IA!
+        1. Faça sua pergunta
+        2. Aguarde a resposta
+        3. Clique no botão **"📥 Baixar Parecer em Word (.docx)"**
+        4. O arquivo vem formatado com cabeçalho do escritório, pronto para edição.
+        """)
+        
+    with st.expander("📄 Análise de Documentos"):
+        st.markdown("""
+        **Revise contratos e peças em segundos:**
+        
+        1. Cole o texto ou faça upload (PDF/DOCX/TXT)
+        2. Clique em **Analisar Documento**
+        3. A IA aponta riscos, cláusulas abusivas e pontos de atenção
+        4. **Exporte o relatório** em Word para enviar ao cliente
+        """)
+        
+    with st.expander("💡 Sugestões Inteligentes"):
+        st.markdown("""
+        **Está travado em um caso?**
+        
+        - Selecione um processo ativo
+        - A IA analisa os dados do caso (ação, status, observações)
+        - Receba 5 sugestões práticas de próximas ações
+        - Baixe as sugestões em Word para anexar ao planejamento do caso
+        """)
+
 def render_guide_admin():
     st.markdown("### 🔐 Administração do Sistema")
     
@@ -417,6 +461,12 @@ def render_faq(busca=""):
         - Senhas com hash SHA-256
         - Backup automático disponível
         - Logs de auditoria de todas as ações
+        """,
+        
+        "Como salvar a resposta da IA?": """
+        Em todas as funcionalidades da IA (Chat, Análise, Sugestões),
+        existe um botão **"📥 Baixar Parecer em Word (.docx)"**.
+        Basta clicar para baixar o arquivo editável.
         """
     }
     
