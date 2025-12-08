@@ -9,7 +9,8 @@ def render():
     st.markdown("<h1 style='color: var(--text-main);'>📊 Relatórios e Inteligência</h1>", unsafe_allow_html=True)
     
     # Abas Principais
-    t1, t2, t3, t4, t5 = st.tabs(["💰 Financeiro", "📈 DRE Gerencial", "💎 Rentabilidade", "⚖️ Operacional", "🤝 Comercial"])
+    # Abas Principais
+    t1, t2, t3, t4, t5, t6, t7 = st.tabs(["💰 Financeiro", "📈 DRE Gerencial", "💎 Rentabilidade", "⚖️ Operacional", "🤝 Comercial", "💸 Comissões", "💾 Exportação & Backup"])
     
     # --- ABA 1: FINANCEIRO ---
     with t1:
@@ -30,6 +31,14 @@ def render():
     # --- ABA 5: COMERCIAL ---
     with t5:
         render_comercial()
+
+    # --- ABA 6: COMISSÕES ---
+    with t6:
+        render_comissoes()
+
+    # --- ABA 7: EXPORTAÇÃO & BACKUP ---
+    with t7:
+        render_exportacao_backup()
 
 def render_financeiro():
     st.markdown("### Fluxo de Caixa")
@@ -128,6 +137,19 @@ def render_dre():
     )
     fig.update_layout(title=f"DRE Cascata ({data_inicio} a {data_fim})")
     st.plotly_chart(fig, use_container_width=True)
+    
+    
+    # Gráfico de Despesas por Categoria
+    despesas_cat = df_dre[df_dre['tipo'] == 'Saída']
+    if not despesas_cat.empty:
+        fig_pizza = px.pie(
+            despesas_cat, 
+            values='total', 
+            names='categoria', 
+            title="Distribuição de Despesas",
+            hole=0.4
+        )
+        st.plotly_chart(fig_pizza, use_container_width=True)
     
     # Tabela Detalhada com Exportação
     st.markdown("#### Detalhamento por Categoria")
@@ -257,3 +279,121 @@ def render_comercial():
         st.dataframe(propostas[['nome', 'proposta_valor', 'proposta_objeto', 'telefone']], use_container_width=True)
     else:
         st.info("Nenhuma proposta ativa em negociação.")
+
+def render_comissoes():
+    st.markdown("### Relatório de Comissões e Parcerias")
+    
+    # Query para buscar comissões (categoria = 'Repasse de Parceria' ou 'Comissão Parceria')
+    # Ajuste conforme categorias usadas no sistema
+    query = """
+        SELECT 
+            f.id,
+            f.data as data_pagamento,
+            f.valor,
+            f.descricao,
+            f.status_pagamento,
+            p.nome as parceiro_nome,
+            proc.numero as processo_numero,
+            proc.acao as processo_acao,
+            c.nome as cliente_nome
+        FROM financeiro f
+        LEFT JOIN parceiros p ON f.id_parceiro = p.id
+        LEFT JOIN processos proc ON f.id_processo = proc.id
+        LEFT JOIN clientes c ON f.id_cliente = c.id
+        WHERE f.categoria IN ('Repasse de Parceria', 'Comissão Parceria')
+        ORDER BY f.data DESC
+    """
+    
+    try:
+        df = db.sql_get_query(query)
+    except Exception as e:
+        st.error(f"Erro ao buscar comissões: {e}")
+        return
+
+    if df.empty:
+        st.info("Nenhum registro de comissão/repasse encontrado.")
+        return
+
+    # Filtros
+    c1, c2 = st.columns(2)
+    parceiros_lista = df['parceiro_nome'].unique().tolist()
+    # Tratar None
+    parceiros_lista = [p for p in parceiros_lista if p]
+    
+    sel_parceiro = c1.multiselect("Filtrar por Parceiro", parceiros_lista)
+    status_filtro = c2.multiselect("Status", df['status_pagamento'].unique())
+    
+    if sel_parceiro:
+        df = df[df['parceiro_nome'].isin(sel_parceiro)]
+    if status_filtro:
+        df = df[df['status_pagamento'].isin(status_filtro)]
+        
+    # Métricas
+    total_pago = df[df['status_pagamento'] == 'Pago']['valor'].sum()
+    total_pendente = df[df['status_pagamento'] == 'Pendente']['valor'].sum()
+    
+    m1, m2 = st.columns(2)
+    m1.metric("Total Pago", f"R$ {total_pago:,.2f}")
+    m2.metric("Pendente", f"R$ {total_pendente:,.2f}")
+    
+    st.dataframe(
+        df[['data_pagamento', 'parceiro_nome', 'valor', 'status_pagamento', 'descricao', 'cliente_nome']],
+        use_container_width=True,
+        column_config={
+            "valor": st.column_config.NumberColumn(format="R$ %.2f")
+        }
+    )
+
+def render_exportacao_backup():
+    st.markdown("### 📤 Exportação de Dados")
+    st.caption("Baixe os dados completos do sistema em formato Excel.")
+    
+    tabelas = {
+        "Clientes": "clientes",
+        "Processos": "processos",
+        "Financeiro": "financeiro",
+        "Agenda": "agenda",
+        "Parceiros": "parceiros"
+    }
+    
+    cols = st.columns(len(tabelas))
+    
+    for i, (label, table) in enumerate(tabelas.items()):
+        with cols[i]:
+            df = db.sql_get(table)
+            
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                df.to_excel(writer, sheet_name=label, index=False)
+                
+            st.download_button(
+                label=f"📥 {label}",
+                data=buffer.getvalue(),
+                file_name=f"{label}_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.ms-excel",
+                use_container_width=True
+            )
+            
+    st.divider()
+    st.markdown("### 🛡️ Backup Completo do Sistema")
+    st.caption("Gera um arquivo SQL contendo toda a estrutura e dados do banco de dados.")
+    
+    if st.button("📦 Gerar Backup Completo (SQL)"):
+        try:
+            # Dump do SQLite
+            conn = db.get_connection()
+            with io.StringIO() as f:
+                for line in conn.iterdump():
+                    f.write('%s\n' % line)
+                sql_dump = f.getvalue()
+                
+            st.download_button(
+                label="⬇️ Baixar Backup SQL",
+                data=sql_dump,
+                file_name=f"Backup_LopesRibeiro_{datetime.now().strftime('%Y%m%d_%H%M')}.sql",
+                mime="application/sql"
+            )
+            st.success("Backup gerado com sucesso!")
+            
+        except Exception as e:
+            st.error(f"Erro ao gerar backup: {e}")

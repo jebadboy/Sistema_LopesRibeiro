@@ -4,8 +4,11 @@ Com integração ao Google Calendar
 """
 
 import streamlit as st
+import os
 import database as db
 import google_calendar as gc
+import utils as ut
+import urllib.parse
 from datetime import datetime, timedelta
 import pandas as pd
 import calendar as cal
@@ -175,7 +178,7 @@ def render_lista_eventos():
     with col1:
         filtro_tipo = st.selectbox("Tipo", ["Todos", "prazo", "audiencia", "tarefa"])
     with col2:
-        filtro_status = st.selectbox("Status", ["Todos", "pendente", "concluido", "cancelado"])
+        filtro_status = st.selectbox("Status", ["Todos", "pendente", "concluido", "cancelado"], index=1)  # Padrão: pendente
     with col3:
         filtro_periodo = st.selectbox("Período", ["Próximos 7 dias", "Próximos 30 dias", "Todos"])
     
@@ -209,6 +212,73 @@ def render_lista_eventos():
         st.info("Nenhum evento cadastrado.")
 
 
+def gerar_link_lembrete_whatsapp(evento, telefone=None):
+    """
+    Gera link de WhatsApp com mensagem de lembrete do evento.
+    
+    Args:
+        evento: Dict com dados do evento
+        telefone: Telefone do destinatário (opcional, busca do processo/cliente se não informado)
+    
+    Returns:
+        str: Link do WhatsApp ou None se não tiver telefone
+    """
+    # Tentar obter telefone
+    if not telefone:
+        # Buscar do processo vinculado, se houver
+        if evento.get('id_processo'):
+            try:
+                proc = db.sql_get_query(
+                    "SELECT c.telefone FROM processos p JOIN clientes c ON p.id_cliente = c.id WHERE p.id = ?",
+                    (evento['id_processo'],)
+                )
+                if not proc.empty and proc.iloc[0]['telefone']:
+                    telefone = proc.iloc[0]['telefone']
+            except:
+                pass
+    
+    if not telefone:
+        return None
+    
+    # Calcular dias até o evento
+    try:
+        data_evento = datetime.strptime(evento['data_evento'], '%Y-%m-%d').date()
+        dias_restantes = (data_evento - datetime.now().date()).days
+        
+        if dias_restantes < 0:
+            dias_texto = "já passou"
+        elif dias_restantes == 0:
+            dias_texto = "é HOJE"
+        elif dias_restantes == 1:
+            dias_texto = "é AMANHÃ"
+        else:
+            dias_texto = f"faltam {dias_restantes} dias"
+    except:
+        dias_texto = ""
+    
+    # Formatar mensagem
+    tipo_nome = {"prazo": "Prazo", "audiencia": "Audiência", "tarefa": "Tarefa"}.get(evento['tipo'], "Compromisso")
+    
+    mensagem = f"⚠️ *Lembrete - {tipo_nome}*\n\n"
+    mensagem += f"📋 {evento['titulo']}\n"
+    mensagem += f"📅 Data: {evento['data_evento']}"
+    if evento.get('hora_evento'):
+        mensagem += f" às {evento['hora_evento']}"
+    mensagem += f"\n⏰ {dias_texto.capitalize()}\n"
+    
+    if evento.get('descricao'):
+        mensagem += f"\nℹ️ {evento['descricao'][:100]}"
+    
+    # Limpar telefone
+    telefone_limpo = ut.limpar_numeros(telefone)
+    if not telefone_limpo.startswith('55'):
+        telefone_limpo = '55' + telefone_limpo
+    
+    # Gerar link
+    mensagem_encoded = urllib.parse.quote(mensagem)
+    return f"https://wa.me/{telefone_limpo}?text={mensagem_encoded}"
+
+
 def render_card_evento(evento):
     """Renderiza card de um evento"""
     # Ícones por tipo
@@ -228,27 +298,58 @@ def render_card_evento(evento):
     status_emoji = {"pendente": "🔴", "concluido": "✅", "cancelado": "❌"}
     status_icon = status_emoji.get(evento['status'], "⚪")
     
+    # Calcular dias restantes
+    try:
+        data_evento = datetime.strptime(evento['data_evento'], '%Y-%m-%d').date()
+        dias_restantes = (data_evento - datetime.now().date()).days
+        if dias_restantes == 0:
+            dias_badge = "🔥 HOJE"
+        elif dias_restantes == 1:
+            dias_badge = "⚡ AMANHÃ"
+        elif dias_restantes > 0 and dias_restantes <= 3:
+            dias_badge = f"⚠️ {dias_restantes} dias"
+        elif dias_restantes > 0:
+            dias_badge = f"📆 {dias_restantes} dias"
+        else:
+            dias_badge = "⏰ Passado"
+    except:
+        dias_badge = ""
+    
     with st.container():
-        col1, col2, col3 = st.columns([6, 2, 2])
+        col1, col2, col3, col4 = st.columns([5, 2, 1.5, 1.5])
         
         with col1:
             st.markdown(f"### {icone} {evento['titulo']}")
-            st.caption(f"📅 {evento['data_evento']} | {status_icon} {evento['status'].upper()}")
+            st.caption(f"📅 {evento['data_evento']} | {status_icon} {evento['status'].upper()} | {dias_badge}")
             if evento.get('descricao'):
                 st.markdown(evento['descricao'], unsafe_allow_html=True)
             if evento.get('responsavel'):
                 st.caption(f"👤 Responsável: {evento['responsavel']}")
         
         with col2:
+            # Botão WhatsApp (se evento pendente)
+            if evento['status'] == 'pendente':
+                link_whatsapp = gerar_link_lembrete_whatsapp(evento)
+                if link_whatsapp:
+                    st.link_button("📱 WhatsApp", link_whatsapp, use_container_width=True)
+                else:
+                    # Mostrar campo para digitar telefone
+                    tel_manual = st.text_input("📱 Tel:", key=f"tel_{evento['id']}", placeholder="11999999999")
+                    if tel_manual:
+                        link_manual = gerar_link_lembrete_whatsapp(evento, tel_manual)
+                        if link_manual:
+                            st.link_button("📱 Enviar", link_manual, use_container_width=True)
+        
+        with col3:
             # Botão editar
-            if st.button("✏️ Editar", key=f"edit_{evento['id']}"):
+            if st.button("✏️", key=f"edit_{evento['id']}", help="Editar evento"):
                 st.session_state[f'editing_{evento["id"]}'] = True
                 st.rerun()
         
-        with col3:
+        with col4:
             # Botão concluir
             if evento['status'] == 'pendente':
-                if st.button("✅ Concluir", key=f"complete_{evento['id']}"):
+                if st.button("✅", key=f"complete_{evento['id']}", help="Marcar como concluído"):
                     db.crud_update(
                         'agenda',
                         {'status': 'concluido'},
@@ -273,6 +374,9 @@ def render_novo_evento():
             tipo = st.selectbox("Tipo de Evento *", ["prazo", "audiencia", "tarefa"])
             titulo = st.text_input("Título *")
             data_evento = st.date_input("Data do Evento *", value=datetime.now())
+            # Horário obrigatório com valor padrão 9:00
+            from datetime import time
+            hora_evento = st.time_input("Horário *", value=time(9, 0), help="Horário do compromisso (obrigatório)")
         
         with col2:
             prioridade = st.selectbox("Prioridade", ["baixa", "media", "alta", "urgente"])
@@ -282,9 +386,11 @@ def render_novo_evento():
         descricao = st.text_area("Descrição")
         
         # Vincular a processo (opcional)
-        processos_df = db.sql_get('processos', 'numero_processo')
+        processos_df = db.sql_get('processos', 'id, acao, cliente_nome')
         if not processos_df.empty:
-            processos_opcoes = ["Nenhum"] + processos_df['numero_processo'].tolist()
+            # Criar lista formatada "[ID] Cliente - Ação" para garantir unicidade
+            processos_df['label'] = "[ID: " + processos_df['id'].astype(str) + "] " + processos_df['cliente_nome'] + " - " + processos_df['acao']
+            processos_opcoes = ["Nenhum"] + processos_df['label'].tolist()
             processo_selecionado = st.selectbox("Vincular a Processo", processos_opcoes)
         else:
             processo_selecionado = "Nenhum"
@@ -301,7 +407,7 @@ def render_novo_evento():
                 # Preparar dados
                 id_processo = None
                 if processo_selecionado != "Nenhum":
-                    proc = processos_df[processos_df['numero_processo'] == processo_selecionado]
+                    proc = processos_df[processos_df['label'] == processo_selecionado]
                     if not proc.empty:
                         id_processo = int(proc.iloc[0]['id'])
                 
@@ -310,6 +416,7 @@ def render_novo_evento():
                     'titulo': titulo,
                     'descricao': descricao,
                     'data_evento': data_evento.strftime('%Y-%m-%d'),
+                    'hora_evento': hora_evento.strftime('%H:%M'),  # Obrigatório
                     'responsavel': responsavel,
                     'id_processo': id_processo,
                     'status': 'pendente',
@@ -324,22 +431,25 @@ def render_novo_evento():
                 google_event_id = None
                 if sync_google and evento_id:
                     username = st.session_state.get('user', 'admin')
-                    google_event_id = gc.sincronizar_evento(
-                        username, evento_id, evento_data, operacao='criar'
-                    )
-                    
-                    if google_event_id:
-                        # Atualizar evento com ID do Google
-                        db.crud_update(
-                            'agenda',
-                            {'google_calendar_id': google_event_id},
-                            'id = ?',
-                            (evento_id,),
-                            f"Adicionado ID Google Calendar: {google_event_id}"
+                    try:
+                        google_event_id = gc.sincronizar_evento(
+                            username, evento_id, evento_data, operacao='criar'
                         )
-                        st.success(f"✅ Evento criado e sincronizado com Google Calendar!")
-                    else:
-                        st.warning("Evento criado, mas não foi possível sincronizar com Google Calendar. Verifique se você está autenticado.")
+                        
+                        if google_event_id:
+                            # Atualizar evento com ID do Google
+                            db.crud_update(
+                                'agenda',
+                                {'google_calendar_id': google_event_id},
+                                'id = ?',
+                                (evento_id,),
+                                f"Adicionado ID Google Calendar: {google_event_id}"
+                            )
+                            st.success(f"✅ Evento criado e sincronizado com Google Calendar!")
+                        else:
+                            st.warning("Evento criado, mas não foi possível sincronizar com Google Calendar. Verifique se você está autenticado.")
+                    except Exception as e:
+                        st.warning(f"Evento criado localmente, mas houve erro na sincronização com Google: {e}")
                 else:
                     st.success(f"✅ Evento criado com sucesso!")
                 
@@ -391,6 +501,7 @@ def render_config_google():
                     )
                     
                     if eventos:
+                        st.info(f"Encontrados {len(eventos)} eventos no Google Calendar. Verificando duplicatas...")
                         importados = 0
                         for evento in eventos:
                             # Verificar se já existe
@@ -406,7 +517,10 @@ def render_config_google():
                             db.crud_insert('agenda', evento, f"Importado do Google: {evento['titulo']}")
                             importados += 1
                         
-                        st.success(f"✅ {importados} evento(s) importado(s) com sucesso!")
+                        if importados > 0:
+                            st.success(f"✅ {importados} evento(s) importado(s) com sucesso!")
+                        else:
+                            st.warning("Todos os eventos encontrados já estão cadastrados no sistema.")
                     else:
                         st.info("Nenhum evento encontrado no período selecionado.")
             else:
@@ -423,11 +537,14 @@ def render_config_google():
         """)
         
         if st.button("🔐 Conectar com Google Calendar", type="primary"):
-            with st.spinner("Iniciando autenticação..."):
-                service = gc.autenticar_google(username)
-                if service:
-                    st.success("✅ Conectado com sucesso!")
-                    st.balloons()
-                    st.rerun()
-                else:
-                    st.error("Erro na autenticação. Verifique se o arquivo credentials.json está presente.")
+            if not os.path.exists('credentials.json') and not os.path.exists('service_account.json'):
+                st.error("Arquivo `credentials.json` não encontrado. Por favor, adicione o arquivo na pasta do projeto.")
+            else:
+                with st.spinner("Iniciando autenticação..."):
+                    service = gc.autenticar_google(username)
+                    if service:
+                        st.success("✅ Conectado com sucesso!")
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error("Erro na autenticação. Verifique os logs para mais detalhes.")

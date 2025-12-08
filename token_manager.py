@@ -1,48 +1,16 @@
 """
 Módulo para gerenciamento de tokens públicos de acesso a processos.
 Permite que clientes acessem status de processos sem login através de link seguro.
+Refatorado para usar a infraestrutura do database.py
 """
 
-import sqlite3
 import secrets
 from datetime import datetime, timedelta
 import logging
+import database as db
+import pandas as pd
 
 logger = logging.getLogger(__name__)
-DB_NAME = 'dados_escritorio.db'
-
-def inicializar_tabela_tokens():
-    """
-    Cria a tabela tokens_publicos se não existir.
-    Deve ser chamada durante a inicialização do banco.
-    """
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tokens_publicos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                token TEXT UNIQUE NOT NULL,
-                id_processo INTEGER NOT NULL,
-                data_criacao DATETIME DEFAULT CURRENT_TIMESTAMP,
-                data_expiracao DATETIME,
-                ativo BOOLEAN DEFAULT 1,
-                acessos INTEGER DEFAULT 0,
-                ultimo_acesso DATETIME,
-                FOREIGN KEY (id_processo) REFERENCES processos(id) ON DELETE CASCADE
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        logger.info("Tabela tokens_publicos inicializada com sucesso")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Erro ao criar tabela tokens_publicos: {e}")
-        return False
-
 
 def gerar_token_publico(id_processo, dias_validade=30):
     """
@@ -62,21 +30,30 @@ def gerar_token_publico(id_processo, dias_validade=30):
         # Calcular data de expiração
         data_expiracao = datetime.now() + timedelta(days=dias_validade)
         
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
+        # Inserir token no banco usando db.encapsulado
+        dados = {
+            'token': token,
+            'id_processo': id_processo,
+            'data_expiracao': data_expiracao.isoformat(),
+            'ativo': 1
+        }
         
-        # Inserir token no banco
-        cursor.execute('''
-            INSERT INTO tokens_publicos 
-            (token, id_processo, data_expiracao, ativo)
+        # Como crud_insert retorna ID, usamos sql_run se quisermos garantir apenas a inserção
+        # Mas podemos usar crud_insert se funcionar bem para a tabela
+        # Vou usar sql_run direto para garantir controle sobre a query
+        
+        query = """
+            INSERT INTO tokens_publicos (token, id_processo, data_expiracao, ativo)
             VALUES (?, ?, ?, 1)
-        ''', (token, id_processo, data_expiracao.isoformat()))
+        """
+        success = db.sql_run(query, (token, id_processo, data_expiracao.isoformat()))
         
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"Token gerado para processo ID {id_processo}, validade: {dias_validade} dias")
-        return token
+        if success:
+            logger.info(f"Token gerado para processo ID {id_processo}, validade: {dias_validade} dias")
+            return token
+        else:
+            logger.error("Falha ao inserir token no banco")
+            return None
         
     except Exception as e:
         logger.error(f"Erro ao gerar token para processo {id_processo}: {e}")
@@ -95,48 +72,48 @@ def validar_token_publico(token):
         int: ID do processo se token válido, None caso contrário
     """
     try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
         # Buscar token
-        cursor.execute('''
-            SELECT id_processo, data_expiracao, ativo
-            FROM tokens_publicos
-            WHERE token = ?
-        ''', (token,))
+        query = "SELECT id_processo, data_expiracao, ativo FROM tokens_publicos WHERE token = ?"
+        df = db.sql_get_query(query, (token,))
         
-        resultado = cursor.fetchone()
-        
-        if not resultado:
-            conn.close()
+        if df.empty:
             logger.warning(f"Token não encontrado: {token[:10]}...")
             return None
         
-        id_processo, data_expiracao_str, ativo = resultado
+        row = df.iloc[0]
+        id_processo = int(row['id_processo'])
+        data_exp_str = row['data_expiracao']
+        ativo = bool(row['ativo'])
         
         # Verificar se token está ativo
         if not ativo:
-            conn.close()
             logger.warning(f"Token revogado: {token[:10]}...")
             return None
         
         # Verificar expiração
-        data_expiracao = datetime.fromisoformat(data_expiracao_str)
-        if datetime.now() > data_expiracao:
-            conn.close()
-            logger.warning(f"Token expirado: {token[:10]}...")
-            return None
+        try:
+            # Compatibilidade com ISO e strings simples
+            if 'T' in data_exp_str:
+                data_expiracao = datetime.fromisoformat(data_exp_str)
+            else:
+                # Tentar formato simples se necessario, ou assumir string comum
+                data_expiracao = datetime.fromisoformat(data_exp_str)
+                
+            if datetime.now() > data_expiracao:
+                logger.warning(f"Token expirado: {token[:10]}...")
+                return None
+        except:
+             # Se der erro de parse, invalida por segurança
+             logger.error(f"Erro ao parsear data expiração: {data_exp_str}")
+             return None
         
         # Registrar acesso
-        cursor.execute('''
+        update_query = """
             UPDATE tokens_publicos 
-            SET acessos = acessos + 1,
-                ultimo_acesso = ?
+            SET acessos = acessos + 1, ultimo_acesso = ?
             WHERE token = ?
-        ''', (datetime.now().isoformat(), token))
-        
-        conn.commit()
-        conn.close()
+        """
+        db.sql_run(update_query, (datetime.now().isoformat(), token))
         
         logger.info(f"Token validado com sucesso para processo ID {id_processo}")
         return id_processo
@@ -157,26 +134,8 @@ def revogar_token_publico(token):
         bool: True se revogado com sucesso, False caso contrário
     """
     try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            UPDATE tokens_publicos 
-            SET ativo = 0
-            WHERE token = ?
-        ''', (token,))
-        
-        linhas_afetadas = cursor.rowcount
-        conn.commit()
-        conn.close()
-        
-        if linhas_afetadas > 0:
-            logger.info(f"Token revogado: {token[:10]}...")
-            return True
-        else:
-            logger.warning(f"Token não encontrado para revogação: {token[:10]}...")
-            return False
-        
+        query = "UPDATE tokens_publicos SET ativo = 0 WHERE token = ?"
+        return db.sql_run(query, (token,))
     except Exception as e:
         logger.error(f"Erro ao revogar token: {e}")
         return False
@@ -193,40 +152,18 @@ def listar_tokens_processo(id_processo):
         list: Lista de dicionários com informações dos tokens
     """
     try:
-        conn = sqlite3.connect(DB_NAME)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            SELECT 
-                id,
-                token,
-                data_criacao,
-                data_expiracao,
-                ativo,
-                acessos,
-                ultimo_acesso
+        query = """
+            SELECT id, token, data_criacao, data_expiracao, ativo, acessos, ultimo_acesso
             FROM tokens_publicos
             WHERE id_processo = ?
             ORDER BY data_criacao DESC
-        ''', (id_processo,))
+        """
+        df = db.sql_get_query(query, (id_processo,))
         
-        rows = cursor.fetchall()
-        conn.close()
-        
-        tokens = []
-        for row in rows:
-            tokens.append({
-                'id': row['id'],
-                'token': row['token'],
-                'data_criacao': row['data_criacao'],
-                'data_expiracao': row['data_expiracao'],
-                'ativo': bool(row['ativo']),
-                'acessos': row['acessos'],
-                'ultimo_acesso': row['ultimo_acesso']
-            })
-        
-        return tokens
+        if df.empty:
+            return []
+            
+        return df.to_dict('records')
         
     except Exception as e:
         logger.error(f"Erro ao listar tokens do processo {id_processo}: {e}")
@@ -250,41 +187,39 @@ def get_processo_por_token(token):
         return None
     
     try:
-        conn = sqlite3.connect(DB_NAME)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        
         # Buscar processo
-        cursor.execute('SELECT * FROM processos WHERE id = ?', (id_processo,))
-        processo_row = cursor.fetchone()
+        query_proc = "SELECT * FROM processos WHERE id = ?"
+        df_proc = db.sql_get_query(query_proc, (id_processo,))
         
-        if not processo_row:
-            conn.close()
+        if df_proc.empty:
             return None
-        
-        # Converter para dicionário
-        processo = dict(processo_row)
+            
+        processo = df_proc.iloc[0].to_dict()
         
         # Buscar andamentos
-        cursor.execute('''
+        # Ajuste: Garantir limit 10
+        query_and = """
             SELECT * FROM andamentos 
             WHERE id_processo = ? 
             ORDER BY data DESC 
             LIMIT 10
-        ''', (id_processo,))
-        
-        andamentos_rows = cursor.fetchall()
-        processo['andamentos'] = [dict(row) for row in andamentos_rows]
+        """
+        df_and = db.sql_get_query(query_and, (id_processo,))
+        processo['andamentos'] = df_and.to_dict('records') if not df_and.empty else []
         
         # Buscar cliente (se houver id_cliente no processo)
         if 'id_cliente' in processo and processo['id_cliente']:
-            cursor.execute('SELECT nome, email, telefone FROM clientes WHERE id = ?', 
-                         (processo['id_cliente'],))
-            cliente_row = cursor.fetchone()
-            if cliente_row:
-                processo['cliente'] = dict(cliente_row)
+             # Verificar se não é Nan/None
+             if pd.notna(processo['id_cliente']):
+                try:
+                    cid = int(processo['id_cliente'])
+                    query_cli = "SELECT nome, email, telefone FROM clientes WHERE id = ?"
+                    df_cli = db.sql_get_query(query_cli, (cid,))
+                    if not df_cli.empty:
+                         processo['cliente'] = df_cli.iloc[0].to_dict()
+                except:
+                    pass
         
-        conn.close()
         return processo
         
     except Exception as e:

@@ -63,8 +63,9 @@ def render():
             st.session_state.ai_inicializada = ai.inicializar_gemini()
     
     if not st.session_state.ai_inicializada:
-        st.error("❌ Falha ao inicializar IA. Verifique a configuração da API Gemini no arquivo .env")
-        return
+        st.warning("⚠️ IA não inicializada. Algumas funcionalidades podem estar indisponíveis. Verifique a configuração da API Gemini.")
+        # Não retorna mais, permite carregar o histórico
+
     
     st.title("🤖 Assistente Jurídico Inteligente")
     st.caption("Powered by Google Gemini AI")
@@ -97,6 +98,13 @@ def render():
 def render_chat():
     """Renderiza interface de chat"""
     st.subheader("💬 Converse com o Assistente Jurídico")
+    
+    if not st.session_state.get('ai_inicializada'):
+        st.error("❌ IA Offline. Verifique configurações.")
+        return
+    
+    # Ações Rápidas
+    render_quick_actions()
     
     # Inicializar histórico de chat
     if 'chat_history' not in st.session_state:
@@ -155,6 +163,10 @@ def render_analise_documentos():
     """Renderiza interface de análise de documentos"""
     st.subheader("📄 Análise Inteligente de Documentos")
     
+    if not st.session_state.get('ai_inicializada'):
+        st.error("❌ IA Offline.")
+        return
+    
     st.info("🔍 Cole o texto ou faça upload de um documento jurídico para análise automática")
     
     col1, col2 = st.columns([3, 1])
@@ -181,6 +193,8 @@ def render_analise_documentos():
         if texto_extraido.startswith("Erro"):
             st.error(texto_extraido)
             texto_extraido = ""
+        elif not texto_extraido.strip():
+            st.warning("⚠️ O texto extraído está vazio ou ilegível. Se este documento for um PDF escaneado (imagem), a IA não conseguirá ler o conteúdo.")
         else:
             st.success(f"Arquivo '{uploaded_file.name}' carregado com sucesso!")
     
@@ -236,10 +250,27 @@ def render_sugestoes():
     """Renderiza sugestões inteligentes baseadas em processos"""
     st.subheader("💡 Sugestões Inteligentes")
     
+    if not st.session_state.get('ai_inicializada'):
+        st.error("❌ IA Offline.")
+        return
+    
     # Buscar processos ativos
     try:
         processos = db.sql_get('processos')
-        processos_ativos = processos[processos['status'] == 'Ativo']
+        
+        if processos.empty:
+            st.info("Nenhum processo encontrado para análise.")
+            return
+
+        # Verificar se coluna status existe (compatibilidade)
+        if 'status' not in processos.columns:
+            # Tentar usar status_processo ou considerar todos ativos se não tiver filtro
+            if 'status_processo' in processos.columns:
+                 processos_ativos = processos # Fallback, assume todos
+            else:
+                 processos_ativos = processos
+        else:
+            processos_ativos = processos[processos['status'] == 'Ativo']
         
         if processos_ativos.empty:
             st.info("Nenhum processo ativo encontrado")
@@ -338,3 +369,98 @@ def render_historico():
     
     except Exception as e:
         st.error(f"Erro ao carregar histórico: {e}")
+
+# --- FUNÇÕES DE CONTEXTO ---
+
+def get_contexto_financeiro():
+    """Coleta dados financeiros para análise da IA"""
+    try:
+        df = db.sql_get("financeiro")
+        if df.empty: return "Sem dados financeiros."
+        
+        # Resumo
+        total_entrada = df[df['tipo']=='Entrada']['valor'].sum()
+        total_saida = df[df['tipo']=='Saída']['valor'].sum()
+        saldo = total_entrada - total_saida
+        
+        # Inadimplência
+        inadimplentes = df[(df['tipo']=='Entrada') & (df['status_pagamento']=='Pendente') & (df['vencimento'] < datetime.now().strftime('%Y-%m-%d'))]
+        total_inad = inadimplentes['valor'].sum()
+        
+        return {
+            "resumo_geral": {
+                "total_entradas": total_entrada,
+                "total_saidas": total_saida,
+                "saldo": saldo,
+                "inadimplencia_total": total_inad
+            },
+            "top_inadimplentes": inadimplentes[['descricao', 'valor', 'vencimento']].head(5).to_dict('records')
+        }
+    except Exception as e:
+        return f"Erro ao buscar financeiro: {e}"
+
+def get_contexto_processos():
+    """Coleta processos parados há muito tempo"""
+    try:
+        df = db.sql_get("processos")
+        if df.empty: return "Sem processos."
+        
+        # Filtrar ativos
+        ativos = df[df['status'] == 'Ativo']
+        # Simulação de "parados": sem andamento recente (idealmente cruzaria com tabela andamentos, mas vamos simplificar)
+        # Vamos pegar os 5 mais antigos por data de distribuição
+        antigos = ativos.sort_values('data_distribuicao').head(5)
+        
+        return {
+            "total_ativos": len(ativos),
+            "processos_antigos_atencao": antigos[['numero', 'cliente_nome', 'acao', 'data_distribuicao']].to_dict('records')
+        }
+    except Exception as e:
+        return f"Erro ao buscar processos: {e}"
+
+def get_contexto_propostas():
+    """Coleta dados do funil de vendas"""
+    try:
+        df = db.sql_get("clientes")
+        if df.empty: return "Sem clientes."
+        
+        em_negociacao = df[df['status_cliente'] == 'EM NEGOCIAÇÃO']
+        total_potencial = em_negociacao['proposta_valor'].sum()
+        
+        return {
+            "clientes_em_negociacao": len(em_negociacao),
+            "valor_total_pipeline": total_potencial,
+            "lista_propostas": em_negociacao[['nome', 'proposta_valor', 'status_proposta']].to_dict('records')
+        }
+    except Exception as e:
+        return f"Erro ao buscar propostas: {e}"
+
+def render_quick_actions():
+    """Renderiza botões de ação rápida"""
+    st.markdown("##### ⚡ Ações Rápidas")
+    c1, c2, c3 = st.columns(3)
+    
+    prompt_auto = None
+    contexto_auto = None
+    
+    if c1.button("💰 Analisar Financeiro", use_container_width=True):
+        contexto_auto = get_contexto_financeiro()
+        prompt_auto = "Analise a saúde financeira do escritório com base nestes dados. Identifique pontos de atenção, inadimplência e sugira melhorias."
+        
+    if c2.button("⚖️ Processos Parados", use_container_width=True):
+        contexto_auto = get_contexto_processos()
+        prompt_auto = "Analise estes processos que estão antigos ou parados. Sugira despachos ou medidas para dar andamento."
+        
+    if c3.button("🤝 Analisar Propostas", use_container_width=True):
+        contexto_auto = get_contexto_propostas()
+        prompt_auto = "Analise o funil de vendas e as propostas em aberto. Sugira estratégias para fechar esses contratos."
+        
+    # Se clicou em algum botão, processa automaticamente
+    if prompt_auto:
+        # Adicionar ao histórico visual
+        st.session_state.chat_history.append({"role": "user", "content": f"🔄 [Ação Rápida] {prompt_auto}"})
+        
+        with st.spinner("🤖 Analisando dados do sistema..."):
+            resposta = ai.chat_assistente(prompt_auto, contexto=contexto_auto)
+            st.session_state.chat_history.append({"role": "assistant", "content": resposta})
+            st.rerun()

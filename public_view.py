@@ -73,8 +73,8 @@ with col1:
         st.markdown(f"**Cliente:** {processo['cliente_nome']}")
     
     # Numero do processo (se existir)
-    if 'numero_processo' in processo and processo.get('numero_processo'):
-        st.markdown(f"**Numero do Processo:** {processo['numero_processo']}")
+    if 'numero' in processo and processo.get('numero'):
+        st.markdown(f"**Numero do Processo:** {processo['numero']}")
     
     # Tipo/Acao
     if 'tipo' in processo:
@@ -110,6 +110,146 @@ if 'objeto' in processo and processo.get('objeto'):
     st.markdown("### Descricao do Processo")
     st.write(processo['objeto'])
     st.markdown("---")
+    
+    # --- TIMELINE VISUAL (NOVO) ---
+    st.markdown("### 📌 Linha do Tempo do Processo")
+    
+    # Mapeamento de Fases
+    fase_atual = processo.get('fase_processual', 'A Ajuizar')
+    
+    steps = [
+        {"label": "Início", "fases": ["A Ajuizar"], "desc": "Preparação da documentação inicial."},
+        {"label": "Análise Liminar", "fases": ["Aguardando Liminar"], "desc": "Juiz analisando pedido de urgência."},
+        {"label": "Audiência", "fases": ["Audiência Marcada"], "desc": "Audiência agendada ou realizada."},
+        {"label": "Decisão", "fases": ["Sentença", "Em Andamento"], "desc": "Sentença proferida ou processo em curso."},
+        {"label": "Finalizado", "fases": ["Arquivado"], "desc": "Processo encerrado."}
+    ]
+    
+    # Determinar índice da fase atual
+    current_step_idx = 0
+    for i, step in enumerate(steps):
+        if fase_atual in step['fases']:
+            current_step_idx = i
+            break
+            
+    # CSS para Timeline
+    st.markdown("""
+<style>
+    .timeline-container {
+        display: flex;
+        justify_content: space-between;
+        align_items: center;
+        margin: 40px 0;
+        position: relative;
+    }
+    .timeline-line {
+        position: absolute;
+        top: 15px;
+        left: 0;
+        width: 100%;
+        height: 4px;
+        background-color: #e0e0e0;
+        z-index: 0;
+    }
+    .timeline-step {
+        position: relative;
+        z-index: 1;
+        text-align: center;
+        width: 20%;
+    }
+    .dot {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        background-color: #e0e0e0;
+        margin: 0 auto 10px;
+        display: flex;
+        align_items: center;
+        justify_content: center;
+        color: white;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    .step-label {
+        font-size: 0.85em;
+        color: #666;
+    }
+    
+    /* Estados */
+    .completed .dot {
+        background-color: #28a745; /* Verde */
+    }
+    .active .dot {
+        background-color: #007bff; /* Azul */
+        box-shadow: 0 0 0 5px rgba(0, 123, 255, 0.2);
+        transform: scale(1.1);
+    }
+    .active .step-label {
+        color: #007bff;
+        font-weight: bold;
+    }
+    
+    /* Tooltip simples */
+    .timeline-step:hover .tooltip {
+        visibility: visible;
+        opacity: 1;
+    }
+    .tooltip {
+        visibility: hidden;
+        width: 120px;
+        background-color: #333;
+        color: #fff;
+        text-align: center;
+        border-radius: 6px;
+        padding: 5px;
+        position: absolute;
+        z-index: 1;
+        bottom: 100%;
+        left: 50%;
+        margin-left: -60px;
+        opacity: 0;
+        transition: opacity 0.3s;
+        font-size: 0.75em;
+    }
+    .tooltip::after {
+        content: "";
+        position: absolute;
+        top: 100%;
+        left: 50%;
+        margin-left: -5px;
+        border-width: 5px;
+        border-style: solid;
+        border-color: #333 transparent transparent transparent;
+    }
+</style>
+    """, unsafe_allow_html=True)
+    
+    # HTML da Timeline
+    html_steps = ""
+    for i, step in enumerate(steps):
+        status_class = ""
+        icon = str(i + 1)
+        
+        if i < current_step_idx:
+            status_class = "completed"
+            icon = "✓"
+        elif i == current_step_idx:
+            status_class = "active"
+        
+        html_steps += f"""
+<div class="timeline-step {status_class}">
+    <div class="dot">{icon}</div>
+    <div class="step-label">{step['label']}</div>
+    <div class="tooltip">{step['desc']}</div>
+</div>
+"""
+        
+    st.markdown(f"""
+<div class="timeline-container">
+    <div class="timeline-line"></div>
+    {html_steps}
+</div>
+    """, unsafe_allow_html=True)
 
 # Timeline de Andamentos
 st.markdown("### Movimentacoes Processuais")

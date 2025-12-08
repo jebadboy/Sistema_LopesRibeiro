@@ -1,6 +1,7 @@
 # 🚀 Guia de Publicação do Sistema Lopes & Ribeiro
 
 ## 📋 Índice
+
 1. [Opções de Deploy](#opções-de-deploy)
 2. [Opção Recomendada: Streamlit Cloud](#opção-1-streamlit-cloud-recomendado)
 3. [Opção Alternativa: ngrok](#opção-2-ngrok-acesso-temporário)
@@ -21,6 +22,7 @@
 ## Opção 1: Streamlit Cloud (RECOMENDADO) 🌟
 
 ### ✅ Vantagens
+
 - **100% GRATUITO** para projetos privados
 - Acesso de qualquer lugar (PC, celular, tablet)
 - URL personalizada: `https://seu-app.streamlit.app`
@@ -32,6 +34,7 @@
 #### 1. Preparar o Projeto
 
 **a) Verificar `requirements.txt`:**
+
 ```txt
 streamlit
 pandas
@@ -41,6 +44,7 @@ google-generativeai
 ```
 
 **b) Criar `.streamlit/config.toml`:**
+
 ```toml
 [theme]
 primaryColor = "#0066cc"
@@ -52,6 +56,7 @@ port = 8501
 ```
 
 **c) Atualizar `.gitignore`:**
+
 ```
 *.db
 *.log
@@ -71,7 +76,7 @@ git push origin main
 
 #### 3. Deploy no Streamlit Cloud
 
-1. Acesse https://streamlit.io/cloud
+1. Acesse <https://streamlit.io/cloud>
 2. Clique em "Sign in with GitHub"
 3. Clique em "New app"
 4. Selecione:
@@ -83,6 +88,7 @@ git push origin main
 **🎉 Pronto! Aguarde 2-5 minutos**
 
 Você receberá uma URL como:
+
 ```
 https://sistema-lopes-ribeiro.streamlit.app
 ```
@@ -94,35 +100,41 @@ https://sistema-lopes-ribeiro.streamlit.app
 ### Para testes rápidos ou demonstrações
 
 #### 1. Instalar ngrok
-Baixe em: https://ngrok.com/download
+
+Baixe em: <https://ngrok.com/download>
 
 #### 2. Configurar token
+
 ```bash
 ngrok config add-authtoken SEU_TOKEN
 ```
 
 #### 3. Iniciar sistema local
+
 ```bash
 streamlit run app.py
 ```
 
 #### 4. Em outro terminal, criar túnel
+
 ```bash
 ngrok http 8501
 ```
 
 #### 5. Acessar URL fornecida
+
 ```
 https://xxxx.ngrok-free.app
 ```
 
 ⚠️ **Limitações:**
+
 - URL muda a cada reinício
 - Não é permanente
 
 ---
 
-##Configurações Importantes ⚙️
+## Configurações Importantes ⚙️
 
 ### ⚠️ Banco de Dados em Produção
 
@@ -131,22 +143,41 @@ https://xxxx.ngrok-free.app
 **SOLUÇÕES:**
 
 **Opção A - Continuar com SQLite (Simples)**
+
 - Aceitar que dados são temporários
 - Fazer backup manual regularmente
 - Ideal para testes
 
 **Opção B - Migrar para PostgreSQL (Recomendado)**
+
 - Use serviço gratuito:
   - **Supabase** (500MB grátis)
   - **Neon** (500MB grátis)
 - Dados permanentes
 - Ideal para produção
 
+### 🔑 Configurando Segredos (Secrets)
+
+O sistema precisa de credenciais para acessar o Google Drive, Calendar e Gemini. No Streamlit Cloud, isso é feito via **Secrets**.
+
+1. **Obtenha suas credenciais:**
+   - Abra seu arquivo `service_account.json` local.
+   - Tenha sua chave de API do Gemini em mãos.
+
+2. **No Streamlit Cloud:**
+   - Vá no dashboard do seu app.
+   - Clique em "Settings" (três pontinhos) -> "Secrets".
+   - Copie o conteúdo do arquivo `.streamlit/secrets.toml.example` (que está no projeto) e cole na área de edição.
+   - **Substitua os valores** pelos dados reais do seu `service_account.json` e sua `GEMINI_API_KEY`.
+
+> **Importante:** A formatação TOML é sensível. Mantenha a estrutura `[gcp_service_account]` exatamente como no exemplo.
+
 ### 🔒 Proteger Acesso
 
 O sistema já tem login integrado (admin/admin123).
 
 **Para produção:**
+
 1. Mude a senha padrão
 2. Considere adicionar autenticação do Google
 
@@ -155,9 +186,11 @@ O sistema já tem login integrado (admin/admin123).
 ## 📱 Acesso nos Dispositivos
 
 ### PC/Laptop
+
 Abra qualquer navegador e acesse a URL
 
 ### Celular/Tablet
+
 1. Abra no navegador (Chrome/Safari)
 2. Menu > "Adicionar à tela inicial"
 3. Ícone aparecerá como um app!

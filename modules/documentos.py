@@ -28,6 +28,20 @@ def render():
         if cliente_selecionado and modelo_selecionado:
             # Buscar dados
             dados_cliente = df_clientes[df_clientes['nome'] == cliente_selecionado].iloc[0].to_dict()
+            
+            # --- Mapeamento e Campos Compostos ---
+            dados_cliente['cpf'] = dados_cliente.get('cpf_cnpj', '')
+            dados_cliente['cnpj'] = dados_cliente.get('cpf_cnpj', '')
+            
+            parts_endereco = [
+                dados_cliente.get('endereco', ''),
+                (f"nº {dados_cliente.get('numero_casa')}" if dados_cliente.get('numero_casa') else ''),
+                dados_cliente.get('complemento', ''),
+                dados_cliente.get('bairro', ''),
+                (f"{dados_cliente.get('cidade', '')}-{dados_cliente.get('estado', '')}" if dados_cliente.get('cidade') else '')
+            ]
+            dados_cliente['endereco_completo'] = ", ".join([p for p in parts_endereco if p])
+            
             id_modelo = df_modelos[df_modelos['titulo'] == modelo_selecionado].iloc[0]['id']
             
             # Gerar Preview
@@ -57,7 +71,8 @@ def render():
                     * `{profissao}` : Profissão
                     * `{cpf}` : CPF/CNPJ
                     * `{rg}` : RG
-                    * `{endereco}` : Endereço Completo
+                    * `{endereco_completo}` : Endereço + Nº + Bairro + Cidade/UF
+                    * `{endereco}` : Logradouro
                     * `{cidade}` : Cidade
                     * `{estado}` : Estado
                     """)

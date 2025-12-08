@@ -2,6 +2,7 @@ import streamlit as st
 import database as db
 import pandas as pd
 from datetime import datetime
+import re
 
 def render(token):
     """
@@ -66,7 +67,11 @@ def render(token):
     
     if not historico.empty:
         for index, row in historico.iterrows():
-            data_fmt = datetime.strptime(row['data'], "%Y-%m-%d").strftime("%d/%m/%Y")
+            try:
+                data_fmt = datetime.strptime(row['data'], "%Y-%m-%d").strftime("%d/%m/%Y")
+            except:
+                data_fmt = str(row['data'])
+            
             with st.expander(f"{data_fmt} - {row['descricao'][:50]}...", expanded=(index==0)):
                 st.write(f"**Data:** {data_fmt}")
                 st.write(f"**Descrição:** {row['descricao']}")
@@ -78,9 +83,14 @@ def render(token):
     st.caption("Este é um link seguro e exclusivo para consulta. Não compartilhe com terceiros não autorizados.")
     
     # Botão de contato (WhatsApp Link)
-    st.markdown("""
+    tel_suporte = db.get_config('telefone_escritorio', '5511999999999')
+    tel_clean = re.sub(r'\D', '', tel_suporte)
+    if not tel_clean.startswith('55'):
+        tel_clean = '55' + tel_clean
+
+    st.markdown(f"""
         <div style="text-align: center; margin-top: 20px;">
-            <a href="https://wa.me/5511999999999" target="_blank" style="background-color: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+            <a href="https://wa.me/{tel_clean}" target="_blank" style="background-color: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
                 💬 Falar com Advogado no WhatsApp
             </a>
         </div>

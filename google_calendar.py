@@ -40,45 +40,98 @@ def verificar_autenticacao(username):
 
 def autenticar_google(username):
     """
-    Autentica usuário com Google Calendar usando OAuth 2.0.
+    Autentica usuário com Google Calendar.
+    Prioridade:
+    1. Token de Usuário (OAuth 2.0)
+    2. Service Account (Fallback)
+    3. Login Interativo (se não houver token nem service account)
+    
     Retorna objeto de serviço da API ou None se falhar.
     """
     creds = None
     token_file = get_token_file(username)
     
+    # 1. Tentar Token de Usuário primeiro
     try:
-        # Verificar se já existe token salvo
         if os.path.exists(token_file):
             with open(token_file, 'rb') as token:
                 creds = pickle.load(token)
         
-        # Se não há credenciais válidas, fazer login
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                # Token expirado, renovar
+        if creds and creds.valid:
+            logger.info(f"Autenticado via Token de Usuário: {username}")
+            service = build('calendar', 'v3', credentials=creds)
+            return service
+            
+        if creds and creds.expired and creds.refresh_token:
+            try:
                 creds.refresh(Request())
                 logger.info(f"Token renovado para usuário {username}")
-            else:
-                # Primeira autenticação
-                if not os.path.exists(CREDENTIALS_FILE):
-                    logger.error(f"Arquivo {CREDENTIALS_FILE} não encontrado!")
-                    return None
+                # Salvar token renovado
+                with open(token_file, 'wb') as token:
+                    pickle.dump(creds, token)
                 
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    CREDENTIALS_FILE, SCOPES)
-                creds = flow.run_local_server(port=0)
-                logger.info(f"Autenticação realizada com sucesso para {username}")
-            
-            # Salvar credenciais para próxima execução
-            with open(token_file, 'wb') as token:
-                pickle.dump(creds, token)
-        
-        # Criar serviço Google Calendar
-        service = build('calendar', 'v3', credentials=creds)
-        return service
-    
+                service = build('calendar', 'v3', credentials=creds)
+                return service
+            except Exception as e:
+                logger.warning(f"Falha ao renovar token: {e}")
+                creds = None  # Invalidar para tentar fallback
     except Exception as e:
-        logger.error(f"Erro na autenticação Google Calendar: {e}")
+        logger.error(f"Erro ao carregar token de usuário: {e}")
+        creds = None
+
+    # 2. Fallback para Service Account (Secrets ou Arquivo)
+    
+    # Tentar via Secrets (Prioridade em Produção)
+    if "gcp_service_account" in st.secrets:
+        try:
+            service_account_info = st.secrets["gcp_service_account"]
+            from google.oauth2 import service_account
+            creds_sa = service_account.Credentials.from_service_account_info(
+                service_account_info, scopes=SCOPES
+            )
+            service = build('calendar', 'v3', credentials=creds_sa)
+            logger.info(f"Autenticado via Service Account (Secrets)")
+            return service
+        except Exception as e:
+            logger.error(f"Falha na autenticação via Service Account (Secrets): {e}")
+
+    # Tentar via Arquivo Local
+    service_account_file = 'service_account.json'
+    if os.path.exists(service_account_file):
+        try:
+            from google.oauth2 import service_account
+            creds_sa = service_account.Credentials.from_service_account_file(
+                service_account_file, scopes=SCOPES
+            )
+            service = build('calendar', 'v3', credentials=creds_sa)
+            logger.info(f"Autenticado via Service Account (Fallback Local)")
+            return service
+        except Exception as e:
+            logger.error(f"Falha na autenticação via Service Account (Arquivo): {e}")
+    
+    # 3. Login Interativo (apenas se não houver credenciais válidas de nenhum tipo)
+    # Nota: Se chegou aqui, não temos token válido nem service account funcional
+    try:
+        if not os.path.exists(CREDENTIALS_FILE):
+            # Em produção (Streamlit Cloud), não podemos fazer login interativo
+            logger.error(f"Arquivo {CREDENTIALS_FILE} não encontrado e sem secrets configurados!")
+            return None
+        
+        logger.info("Iniciando fluxo de autenticação interativa...")
+        flow = InstalledAppFlow.from_client_secrets_file(
+            CREDENTIALS_FILE, SCOPES)
+        creds = flow.run_local_server(port=0)
+        
+        # Salvar credenciais
+        with open(token_file, 'wb') as token:
+            pickle.dump(creds, token)
+            
+        service = build('calendar', 'v3', credentials=creds)
+        logger.info(f"Autenticação interativa realizada com sucesso para {username}")
+        return service
+        
+    except Exception as e:
+        logger.error(f"Erro na autenticação interativa Google Calendar: {e}")
         return None
 
 
@@ -237,22 +290,41 @@ def importar_eventos_google(service, data_inicio=None, data_fim=None):
         list: Lista de eventos importados
     """
     try:
+        from dateutil import tz
+        
         # Definir período de busca (próximos 90 dias se não especificado)
         if not data_inicio:
             data_inicio = datetime.now()
         if not data_fim:
             data_fim = data_inicio + timedelta(days=90)
         
+        # Função auxiliar para converter para UTC RFC3339
+        def to_utc_iso(dt):
+            # Se for naive, assumir America/Sao_Paulo
+            if dt.tzinfo is None:
+                saopaulo = tz.gettz('America/Sao_Paulo')
+                dt = dt.replace(tzinfo=saopaulo)
+            
+            # Converter para UTC
+            dt_utc = dt.astimezone(tz.UTC)
+            return dt_utc.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+        time_min = to_utc_iso(data_inicio)
+        time_max = to_utc_iso(data_fim)
+        
+        logger.info(f"Buscando eventos no Google Calendar entre {time_min} e {time_max} (UTC)")
+        
         # Buscar eventos
         events_result = service.events().list(
             calendarId='primary',
-            timeMin=data_inicio.isoformat() + 'Z',
-            timeMax=data_fim.isoformat() + 'Z',
+            timeMin=time_min,
+            timeMax=time_max,
             singleEvents=True,
             orderBy='startTime'
         ).execute()
         
         events = events_result.get('items', [])
+        logger.info(f"Google Calendar retornou {len(events)} eventos brutos.")
         
         eventos_importados = []
         for event in events:
@@ -283,11 +355,12 @@ def importar_eventos_google(service, data_inicio=None, data_fim=None):
                 'prioridade': 'media'
             })
         
-        logger.info(f"Importados {len(eventos_importados)} eventos do Google Calendar")
+        logger.info(f"Processados {len(eventos_importados)} eventos válidos para importação.")
         return eventos_importados
     
     except Exception as e:
         logger.error(f"Erro ao importar eventos do Google Calendar: {e}")
+        st.error(f"Erro técnico na importação: {e}")
         return []
 
 

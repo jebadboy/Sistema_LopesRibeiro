@@ -13,3 +13,15 @@ google-auth-oauthlib
 streamlit-calendar
 google-generativeai
 python-dotenv
+python-dateutil
+ofxparse>=0.21
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+reportlab
+num2words
+xlsxwriter
+bcrypt
+# Workspace Integration - PDF e OCR
+PyMuPDF>=1.23.0
+google-cloud-vision>=3.5.0
+

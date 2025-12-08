@@ -1,26 +1,28 @@
 import streamlit as st
+import database as db
+import re
 
 def render():
     """Módulo de Ajuda e Documentação do Sistema"""
     
-    st.markdown("<h1 style='color: var(--text-main);'>📚 Central de Ajuda</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='color: var(--text-main);'>[CENTRAL] Central de Ajuda</h1>", unsafe_allow_html=True)
     st.markdown("Encontre orientações, guias e respostas para suas dúvidas sobre o sistema.")
     
     # Busca
     col1, col2 = st.columns([3, 1])
     with col1:
-        busca = st.text_input("🔍 Buscar ajuda...", placeholder="Digite sua dúvida...")
+        busca = st.text_input("[BUSCA] Buscar ajuda...", placeholder="Digite sua dúvida...")
     with col2:
         st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🎥 Tour Guiado", use_container_width=True):
-            st.info("🎬 Tour interativo em desenvolvimento!")
+        if st.button("[VIDEO] Tour Guiado", use_container_width=True):
+            st.info("[TOUR] Tour interativo em desenvolvimento!")
     
     # Tabs principais
     tab1, tab2, tab3, tab4 = st.tabs([
-        "🚀 Início Rápido", 
-        "📖 Guias por Módulo", 
-        "❓ Perguntas Frequentes", 
-        "🔧 Solucionando Problemas"
+        "[INICIO] Início Rápido", 
+        "[GUIAS] Guias por Módulo", 
+        "[FAQ] Perguntas Frequentes", 
+        "[SUPORTE] Solucionando Problemas"
     ])
     
     with tab1:
@@ -37,27 +39,27 @@ def render():
 
 def render_quick_start():
     """Guia de início rápido"""
-    st.markdown("### 🎯 Primeiros Passos")
+    st.markdown("### [INICIO] Primeiros Passos")
     
     st.markdown("""
     Bem-vindo ao **Sistema Lopes & Ribeiro**! Este guia vai te ajudar a começar rapidamente.
     
-    #### 1️⃣ Login no Sistema
+    #### 1. Login no Sistema
     - **Usuário padrão:** `admin`
     - **Senha padrão:** `admin`
-    - ⚠️ **Importante:** Altere a senha após o primeiro acesso em *Administração*
+    - [IMPORTANTE] **Importante:** Altere a senha após o primeiro acesso em *Administração*
     
-    #### 2️⃣ Navegação
+    #### 2. Navegação
     Use o **menu lateral** para acessar os módulos:
-    - 📊 **Painel Geral** - Visão geral e KPIs
-    - 👥 **Clientes (CRM)** - Gestão de clientes
-    - ⚖️ **Processos** - Controle de processos jurídicos
-    - 💰 **Financeiro** - Entradas, saídas e controle financeiro
-    - 📈 **Relatórios** - Análises e dashboards
-    - 🤖 **IA Jurídica** - Assistente inteligente e análise de documentos
-    - 🔐 **Administração** - Usuários e configurações (apenas admin)
+    - [DASHBOARD] **Painel Geral** - Visão geral e KPIs
+    - [CLIENTES] **Clientes (CRM)** - Gestão de clientes
+    - [PROCESSOS] **Processos** - Controle de processos jurídicos
+    - [FINANCEIRO] **Financeiro** - Entradas, saídas e controle financeiro
+    - [RELATORIOS] **Relatórios** - Análises e dashboards
+    - [IA] **IA Jurídica** - Assistente inteligente e análise de documentos
+    - [ADMIN] **Administração** - Usuários e configurações (apenas admin)
     
-    #### 3️⃣ Fluxo de Trabalho Recomendado
+    #### 3. Fluxo de Trabalho Recomendado
     """)
     
     col1, col2, col3 = st.columns(3)
@@ -97,11 +99,11 @@ def render_quick_start():
     st.divider()
     
     st.markdown("""
-    #### 💡 Dicas Importantes
-    - 🔄 **Sincronização**: Alterações são salvas automaticamente
-    - 📱 **Mobile**: Sistema funciona em celular e tablet
-    - 🔒 **Segurança**: Sempre faça logout ao terminar
-    - 💾 **Backup**: Faça backup regular em *Administração*
+    #### [DICA] Dicas Importantes
+    - [SYNC] **Sincronização**: Alterações são salvas automaticamente
+    - [MOBILE] **Mobile**: Sistema funciona em celular e tablet
+    - [SEGURANCA] **Segurança**: Sempre faça logout ao terminar
+    - [BACKUP] **Backup**: Faça backup regular em *Administração*
     """)
 
 def render_module_guides():
@@ -109,7 +111,7 @@ def render_module_guides():
     
     module = st.selectbox(
         "Selecione o módulo:",
-        ["Dashboard", "Clientes (CRM)", "Processos", "Financeiro", "Relatórios", "IA Jurídica", "Administração"]
+        ["Dashboard", "Clientes (CRM)", "Processos", "Financeiro", "Propostas", "Relatórios", "IA Jurídica", "Administração"]
     )
     
     if module == "Dashboard":
@@ -120,6 +122,8 @@ def render_module_guides():
         render_guide_processos()
     elif module == "Financeiro":
         render_guide_financeiro()
+    elif module == "Propostas":
+        render_guide_propostas()
     elif module == "Relatórios":
         render_guide_relatorios()
     elif module == "IA Jurídica":
@@ -128,12 +132,12 @@ def render_module_guides():
         render_guide_admin()
 
 def render_guide_dashboard():
-    st.markdown("### 📊 Painel Geral (Dashboard)")
+    st.markdown("### [DASHBOARD] Painel Geral (Dashboard)")
     
     st.markdown("""
     O Dashboard oferece uma **visão geral** do escritório em tempo real.
     
-    #### 📈 KPIs Disponíveis
+    #### [KPIs] KPIs Disponíveis
     
     1. **Saldo Realizado**
        - Total de entradas - Total de saídas
@@ -149,18 +153,18 @@ def render_guide_dashboard():
     4. **Processos Ativos**
        - Total de processos em andamento
     
-    #### 📊 Gráficos
+    #### [DASHBOARD] Gráficos
     
     - **Entradas vs Saídas**: Comparativo mensal
     - **Clientes por Status**: Distribuição do funil comercial
     
-    > **💡 Dica**: Use o Dashboard para reuniões de planejamento
+    > **[DICA] Dica**: Use o Dashboard para reuniões de planejamento
     """)
 
 def render_guide_clientes():
-    st.markdown("### 👥 Clientes (CRM)")
+    st.markdown("### [CLIENTES] Clientes (CRM)")
     
-    with st.expander("➕ Como Cadastrar um Novo Cliente"):
+    with st.expander("[NOVO] Como Cadastrar um Novo Cliente"):
         st.markdown("""
         1. Clique em **"Novo Cliente"**
         2. Preencha os dados obrigatórios:
@@ -179,7 +183,7 @@ def render_guide_clientes():
         5. Clique em **"Salvar Cliente"**
         """)
     
-    with st.expander("💼 Gerenciando Propostas"):
+    with st.expander("[PROPOSTAS] Gerenciando Propostas"):
         st.markdown("""
         **No cadastro do cliente, você pode:**
         
@@ -189,10 +193,10 @@ def render_guide_clientes():
         - Descrever objeto da ação
         - Definir forma de pagamento
         
-        > **💡 Dica**: Use a aba "Propostas" para ver todas as propostas abertas
+        > **[DICA] Dica**: Use a aba "Propostas" para ver todas as propostas abertas
         """)
     
-    with st.expander("🔍 Busca e Filtros"):
+    with st.expander("[BUSCA] Busca e Filtros"):
         st.markdown("""
         - **Buscar por nome**: Digite no campo de busca
         - **Filtrar por status**: Use o seletor de status
@@ -200,9 +204,9 @@ def render_guide_clientes():
         """)
 
 def render_guide_processos():
-    st.markdown("### ⚖️ Processos Jurídicos")
+    st.markdown("### [PROCESSOS] Processos Jurídicos")
     
-    with st.expander("➕ Criar Novo Processo"):
+    with st.expander("[NOVO] Criar Novo Processo"):
         st.markdown("""
         1. Vá em **"Processos"** > **"Novo Processo"**
         2. Preencha:
@@ -213,7 +217,7 @@ def render_guide_processos():
         3. Clique em **"Cadastrar Processo"**
         """)
     
-    with st.expander("📝 Registrar Andamentos"):
+    with st.expander("[ANDAMENTOS] Registrar Andamentos"):
         st.markdown("""
         **Para cada movimentação processual:**
         
@@ -229,7 +233,7 @@ def render_guide_processos():
         > Andamentos ficam em ordem cronológica decrescente
         """)
     
-    with st.expander("🔗 Links Públicos"):
+    with st.expander("[LINKS] Links Públicos"):
         st.markdown("""
         **Compartilhe o andamento do processo com o cliente:**
         
@@ -241,17 +245,17 @@ def render_guide_processos():
            - Descrição (opcional)
         5. Copie e envie o link ao cliente
         
-        ⚠️ **Segurança**: Links expiram automaticamente
+        [SEGURANCA] **Segurança**: Links expiram automaticamente
         """)
 
 def render_guide_financeiro():
-    st.markdown("### 💰 Módulo Financeiro")
+    st.markdown("### [FINANCEIRO] Módulo Financeiro")
     
     st.markdown("""
     O novo módulo financeiro foi totalmente reformulado para oferecer **inteligência e agilidade**.
     """)
     
-    with st.expander("📊 Dashboard Financeiro"):
+    with st.expander("[DASHBOARD] Dashboard Financeiro"):
         st.markdown("""
         No topo da tela, você encontra os **Big Numbers**:
         - **Saldo do Mês**: Quanto sobrou no caixa (Entradas Pagas - Saídas Pagas).
@@ -261,7 +265,7 @@ def render_guide_financeiro():
         O gráfico de **Fluxo de Caixa** mostra a evolução dos últimos 6 meses.
         """)
     
-    with st.expander("➕ Lançamento Inteligente"):
+    with st.expander("[LANCAMENTO] Lançamento Inteligente"):
         st.markdown("""
         O novo formulário se adapta ao que você precisa:
         
@@ -275,7 +279,7 @@ def render_guide_financeiro():
            - **Adiantamento Cliente**: Custas pagas pelo escritório para reembolso (não afeta seu lucro).
         """)
     
-    with st.expander("💳 Controle de Pagamentos"):
+    with st.expander("[PAGAMENTOS] Controle de Pagamentos"):
         st.markdown("""
         - **Status**: Pago ou Pendente
         - **Filtrar por status** para ver inadimplência
@@ -283,17 +287,17 @@ def render_guide_financeiro():
         """)
 
 def render_guide_relatorios():
-    st.markdown("### 📈 Relatórios e Análises")
+    st.markdown("### [RELATORIOS] Relatórios e Análises")
     
     st.markdown("""
     Agora você conta com relatórios de nível de consultoria financeira.
     
-    #### 📅 Funcionalidades Gerais
+    #### [GERAL] Funcionalidades Gerais
     - **Filtros de Data**: Selecione qualquer período (Início e Fim) para análise.
-    - **Exportação Excel**: Botão "📥 Baixar Excel" em todas as tabelas.
+    - **Exportação Excel**: Botão "[DOWNLOAD] Baixar Excel" em todas as tabelas.
     """)
     
-    with st.expander("📈 DRE Gerencial"):
+    with st.expander("[RELATORIOS] DRE Gerencial"):
         st.markdown("""
         O **Demonstrativo de Resultado** mostra a saúde real do escritório:
         
@@ -306,7 +310,7 @@ def render_guide_relatorios():
         *Visualize no gráfico de cascata (waterfall).*
         """)
     
-    with st.expander("💎 Rentabilidade por Cliente"):
+    with st.expander("[RENTABILIDADE] Rentabilidade por Cliente"):
         st.markdown("""
         Descubra quais clientes dão lucro e quais dão prejuízo.
         
@@ -315,41 +319,72 @@ def render_guide_relatorios():
         - **Margem %**: A eficiência do contrato.
         """)
     
-    with st.expander("💰 Financeiro e Inadimplência"):
+    with st.expander("[FINANCEIRO] Financeiro e Inadimplência"):
         st.markdown("""
         - **Fluxo de Caixa**: Gráfico de entradas vs saídas
         - **Inadimplência**: Lista de clientes devedores com **Link direto para WhatsApp** de cobrança.
         """)
     
-    with st.expander("⚖️ Operacional e Comercial"):
+
+    
+    with st.expander("[RELATÓRIOS] Comissões e Exportação"):
         st.markdown("""
-        - **Produtividade**: Processos por advogado.
-        - **Prazos Fatais**: Alertas para os próximos 15 dias.
-        - **Funil de Vendas**: Quantos clientes estão em negociação.
+        - **Comissões**: Relatório de repasses para parceiros.
+        - **Exportação**: Baixe todos os seus dados em Excel na aba "Exportação & Backup".
+        - **Backup**: Gere uma cópia de segurança completa do sistema.
+        """)
+
+def render_guide_propostas():
+    st.markdown("### [PROPOSTAS] Propostas e Comercial")
+    
+    st.markdown("""
+    Gerencie suas negociações e crie propostas profissionais.
+    """)
+    
+    with st.expander("[FUNIL] Funil de Vendas"):
+        st.markdown("""
+        Acompanhe a jornada do cliente:
+        1. **Em Análise**: Proposta sendo criada.
+        2. **Enviada**: Cliente recebeu.
+        3. **Aprovada**: Cliente aceitou (hora de fazer o contrato!).
+        4. **Rejeitada**: Negócio perdido.
+        
+        > Arraste os cards ou mude o status para mover o cliente.
+        """)
+        
+    with st.expander("[MODELOS] Modelos de Proposta"):
+        st.markdown("""
+        Crie templates para não digitar tudo do zero:
+        1. Vá em **Propostas** > **Modelos**
+        2. Crie um modelo (ex: "Divórcio Consensual")
+        3. Defina valor e descrição padrão
+        
+        **Como usar:**
+        Na ficha do cliente (aba Proposta), clique em **"[CARREGAR] Carregar Modelo"**.
         """)
 
 def render_guide_ia():
-    st.markdown("### 🤖 IA Jurídica Inteligente")
+    st.markdown("### [IA] IA Jurídica Inteligente")
     
     st.markdown("""
     O módulo de IA Jurídica atua como um **assistente virtual** para agilizar sua rotina, powered by Google Gemini.
     """)
     
-    with st.expander("💬 Chat Assistente"):
+    with st.expander("[CHAT] Chat Assistente"):
         st.markdown("""
         Converse naturalmente com a IA para:
         - Tirar dúvidas jurídicas
         - Pedir resumos de teses
         - Solicitar modelos de peças
         
-        **✨ Novidade:** Agora você pode baixar a resposta da IA!
+        **[NOVIDADE]** Agora você pode baixar a resposta da IA!
         1. Faça sua pergunta
         2. Aguarde a resposta
-        3. Clique no botão **"📥 Baixar Parecer em Word (.docx)"**
+        3. Clique no botão **"[DOWNLOAD] Baixar Parecer em Word (.docx)"**
         4. O arquivo vem formatado com cabeçalho do escritório, pronto para edição.
         """)
         
-    with st.expander("📄 Análise de Documentos"):
+    with st.expander("[DOCS] Análise de Documentos"):
         st.markdown("""
         **Revise contratos e peças em segundos:**
         
@@ -359,7 +394,7 @@ def render_guide_ia():
         4. **Exporte o relatório** em Word para enviar ao cliente
         """)
         
-    with st.expander("💡 Sugestões Inteligentes"):
+    with st.expander("[SUGESTOES] Sugestões Inteligentes"):
         st.markdown("""
         **Está travado em um caso?**
         
@@ -369,12 +404,21 @@ def render_guide_ia():
         - Baixe as sugestões em Word para anexar ao planejamento do caso
         """)
 
+    with st.expander("[ACESSO RÁPIDO] Ações Rápidas"):
+        st.markdown("""
+        **Análises instantâneas com um clique:**
+        
+        - **[FINANCEIRO] Analisar Financeiro**: A IA lê seu fluxo de caixa e sugere melhorias.
+        - **[PROCESSOS] Processos Parados**: Identifica gargalos e sugere despachos.
+        - **[PROPOSTAS] Analisar Propostas**: Dicas para fechar contratos em aberto.
+        """)
+
 def render_guide_admin():
-    st.markdown("### 🔐 Administração do Sistema")
+    st.markdown("### [ADMIN] Administração do Sistema")
     
-    st.warning("⚠️ **Acesso restrito**: Apenas usuários com perfil 'admin'")
+    st.warning("[ATENCAO] **Acesso restrito**: Apenas usuários com perfil 'admin'")
     
-    with st.expander("👤 Gerenciar Usuários"):
+    with st.expander("[USUARIOS] Gerenciar Usuários"):
         st.markdown("""
         **Criar novo usuário:**
         1. Aba "Usuários"
@@ -387,7 +431,7 @@ def render_guide_admin():
         - **advogado**: Sem acesso a Administração
         """)
     
-    with st.expander("💾 Backup do Banco"):
+    with st.expander("[BACKUP] Backup do Banco"):
         st.markdown("""
         **Recomendação**: Fazer backup **semanal**
         
@@ -400,7 +444,7 @@ def render_guide_admin():
 
 def render_faq(busca=""):
     """Perguntas Frequentes"""
-    st.markdown("### ❓ Perguntas Frequentes")
+    st.markdown("### [FAQ] Perguntas Frequentes")
     
     faqs = {
         "Como alterar minha senha?": """
@@ -419,7 +463,7 @@ def render_faq(busca=""):
         """,
         
         "Posso acessar de vários dispositivos?": """
-        ✅ **Sim!** O sistema é 100% web.
+        [SIM] **Sim!** O sistema é 100% web.
         - Acesse de PC, notebook, tablet ou celular
         - Basta ter internet e navegador
         - Mesma URL em todos os dispositivos
@@ -432,7 +476,7 @@ def render_faq(busca=""):
         """,
         
         "Cliente pode ver o andamento do processo?": """
-        ✅ **Sim!** Use o recurso de **Links Públicos**:
+        [SIM] **Sim!** Use o recurso de **Links Públicos**:
         1. Acesse o processo
         2. Gere um link público
         3. Envie ao cliente
@@ -456,7 +500,7 @@ def render_faq(busca=""):
         """,
         
         "Os dados são seguros?": """
-        ✅ **Sim!**
+        [SIM] **Sim!**
         - Conexão HTTPS criptografada
         - Senhas com hash SHA-256
         - Backup automático disponível
@@ -465,7 +509,7 @@ def render_faq(busca=""):
         
         "Como salvar a resposta da IA?": """
         Em todas as funcionalidades da IA (Chat, Análise, Sugestões),
-        existe um botão **"📥 Baixar Parecer em Word (.docx)"**.
+        existe um botão **"[DOWNLOAD] Baixar Parecer em Word (.docx)"**.
         Basta clicar para baixar o arquivo editável.
         """
     }
@@ -477,21 +521,21 @@ def render_faq(busca=""):
         faqs_filtradas = faqs
     
     if not faqs_filtradas:
-        st.info("🔍 Nenhuma FAQ encontrada para sua busca. Tente outros termos.")
+        st.info("[BUSCA] Nenhuma FAQ encontrada para sua busca. Tente outros termos.")
     else:
         for pergunta, resposta in faqs_filtradas.items():
-            with st.expander(f"❓ {pergunta}"):
+            with st.expander(f"[FAQ] {pergunta}"):
                 st.markdown(resposta)
 
 def render_troubleshooting():
     """Solucionando Problemas"""
-    st.markdown("### 🔧 Solucionando Problemas")
+    st.markdown("### [SUPORTE] Solucionando Problemas")
     
     st.markdown("""
     Encontrou algum problema? Veja as soluções abaixo:
     """)
     
-    with st.expander("🚫 Erro ao fazer login"):
+    with st.expander("[ERRO] Erro ao fazer login"):
         st.markdown("""
         **Possíveis causas:**
         
@@ -508,7 +552,7 @@ def render_troubleshooting():
            - Recriar usuário admin
         """)
     
-    with st.expander("💾 Dados não estão salvando"):
+    with st.expander("[SALVAR] Dados não estão salvando"):
         st.markdown("""
         **Verificar:**
         
@@ -518,7 +562,7 @@ def render_troubleshooting():
         - Veja o log de erros (ícone de erro no canto superior direito)
         """)
     
-    with st.expander("📊 Gráficos não aparecem"):
+    with st.expander("[GRAFICOS] Gráficos não aparecem"):
         st.markdown("""
         **Soluções:**
         
@@ -528,7 +572,7 @@ def render_troubleshooting():
         4. Tente outro navegador (Chrome recomendado)
         """)
     
-    with st.expander("🔗 Link público não funciona"):
+    with st.expander("[LINK] Link público não funciona"):
         st.markdown("""
         **Verificar:**
         
@@ -538,7 +582,7 @@ def render_troubleshooting():
         - Token pode ter sido revogado
         """)
     
-    with st.expander("📱 Problemas no celular"):
+    with st.expander("[MOBILE] Problemas no celular"):
         st.markdown("""
         **Otimize a experiência mobile:**
         
@@ -550,18 +594,27 @@ def render_troubleshooting():
     
     st.divider()
     
-    st.info("""
-    ### 🆘 Ainda com problemas?
+    email_suporte = db.get_config('email_escritorio', 'suporte@lopesribeiroadvogados.com')
+    tel_suporte = db.get_config('telefone_escritorio', '(21) 97032-0748')
+    
+    # Limpar telefone para link do whatsapp
+    tel_clean = re.sub(r'\D', '', tel_suporte)
+    
+    st.info(f"""
+    ### [AJUDA] Ainda com problemas?
     
     **Entre em contato com o suporte:**
-    - 📧 Email: suporte@lopesribeiroadvogados.com
-    - 📱 WhatsApp: (XX) 9XXXX-XXXX
-    - 📝 Descreva o problema em detalhes
-    - 📸 Envie capturas de tela se possível
+    - [EMAIL] Email: {email_suporte}
+    - [WHATSAPP] WhatsApp: {tel_suporte}
+    - [NOTA] Descreva o problema em detalhes
+    - [FOTO] Envie capturas de tela se possível
     """)
     
+    if tel_clean:
+         st.link_button("💬 Fale conosco no WhatsApp", f"https://wa.me/55{tel_clean}")
+    
     st.success("""
-    **💡 Dica**: Antes de reportar, tente:
+    **[DICA] Dica**: Antes de reportar, tente:
     1. Atualizar a página (F5)
     2. Limpar cache do navegador
     3. Fazer logout e login novamente
