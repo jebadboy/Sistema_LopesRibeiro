@@ -9,16 +9,32 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Detectar ambiente
-DATABASE_URL = os.getenv('DATABASE_URL')  # PostgreSQL em produção
+# Detectar ambiente - Prioridade: env var -> streamlit secrets -> SQLite
+DATABASE_URL = os.getenv('DATABASE_URL')
+
+# Se não tiver no ambiente, tentar ler do Streamlit secrets
+if not DATABASE_URL:
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and 'DATABASE_URL' in st.secrets:
+            DATABASE_URL = st.secrets['DATABASE_URL']
+            logger.info("📦 DATABASE_URL lido do Streamlit secrets")
+    except:
+        pass
+
 USE_POSTGRES = DATABASE_URL is not None
 
 if USE_POSTGRES:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    logger.info("🐘 Usando PostgreSQL (Produção)")
+    try:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        logger.info("🐘 Usando PostgreSQL (Supabase)")
+    except ImportError:
+        logger.warning("⚠️ psycopg2 não instalado. Usando SQLite como fallback.")
+        USE_POSTGRES = False
 else:
     logger.info("🗄️  Usando SQLite (Desenvolvimento Local)")
+
 
 class DatabaseAdapter:
     """Adaptador que abstrai SQLite e PostgreSQL"""

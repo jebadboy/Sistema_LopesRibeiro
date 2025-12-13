@@ -272,16 +272,47 @@ def init_db():
             )
         ''')
 
-        # 14. Tabela de Logs de Auditoria (NOVA)
+        # 14. Tabela de Logs de Auditoria (EXPANDIDA para Sprint 2)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS audit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 username TEXT,
+                action TEXT,
+                tabela TEXT,
+                registro_id INTEGER,
+                campo TEXT,
+                valor_anterior TEXT,
+                valor_novo TEXT,
                 details TEXT,
                 timestamp TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        
+        # Migração: Adicionar colunas novas se tabela já existir
+        try:
+            cursor.execute("SELECT action FROM audit_logs LIMIT 1")
+        except:
+            logger.info("Migrando tabela audit_logs: adicionando coluna action")
+            try:
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN action TEXT")
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Erro na migração de audit_logs (action): {e}")
+
+        try:
+            cursor.execute("SELECT tabela FROM audit_logs LIMIT 1")
+        except:
+            logger.info("Migrando tabela audit_logs: adicionando colunas de auditoria detalhada")
+            try:
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN tabela TEXT")
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN registro_id INTEGER")
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN campo TEXT")
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN valor_anterior TEXT")
+                cursor.execute("ALTER TABLE audit_logs ADD COLUMN valor_novo TEXT")
+                conn.commit()
+            except Exception as e:
+                logger.error(f"Erro na migração de audit_logs (detalhes): {e}")
 
         # 15. Tabela Partes do Processo (NOVA - Faltava no Schema)
         cursor.execute('''
@@ -361,6 +392,28 @@ def init_db():
             )
         ''')
 
+        # 21. Tabela Transações Bancárias (Conciliação)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transacoes_bancarias (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                data_transacao TEXT NOT NULL,
+                valor REAL NOT NULL,
+                tipo TEXT NOT NULL,
+                descricao TEXT,
+                transaction_id TEXT UNIQUE NOT NULL,
+                arquivo_origem TEXT,
+                data_importacao TEXT DEFAULT CURRENT_TIMESTAMP,
+                status_conciliacao TEXT DEFAULT 'Pendente',
+                id_financeiro INTEGER REFERENCES financeiro(id),
+                conciliado_por TEXT,
+                data_conciliacao TEXT,
+                link_google_drive TEXT,
+                tipo_origem TEXT,
+                conta_origem TEXT
+            )
+        ''')
+
+
         # Run Migration for Andamentos (IA)
         check_migration_andamentos(cursor)
         
@@ -408,6 +461,42 @@ def init_db():
             ''')
             conn.commit()
         
+        # --- MIGRAÇÃO LGPD (Fase 2) ---
+        # Adicionar colunas de consentimento se não existirem
+        try:
+            cursor.execute("SELECT lgpd_consentimento FROM clientes LIMIT 1")
+        except:
+            logger.info("Migrando tabela clientes: adicionando colunas LGPD")
+            try:
+                cursor.execute("ALTER TABLE clientes ADD COLUMN lgpd_consentimento INTEGER DEFAULT 0")
+                cursor.execute("ALTER TABLE clientes ADD COLUMN lgpd_data_consentimento TEXT")
+                cursor.execute("ALTER TABLE clientes ADD COLUMN lgpd_ip_consentimento TEXT")
+                conn.commit()
+                logger.info("Colunas LGPD adicionadas com sucesso")
+            except Exception as e:
+                logger.error(f"Erro na migração LGPD: {e}")
+        
+        # Configuração de prazo de retenção LGPD (5 anos)
+        if not get_config('lgpd_retencao_anos'):
+            try:
+                cursor.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('lgpd_retencao_anos', '5')")
+                conn.commit()
+            except Exception as e:
+                logger.debug(f"Erro ao configurar retenção LGPD: {e}")
+
+        # --- MIGRAÇÃO TRANSAÇÕES BANCÁRIAS (Novos Campos) ---
+        try:
+            cursor.execute("SELECT tipo_origem FROM transacoes_bancarias LIMIT 1")
+        except:
+             logger.info("Migrando tabela transacoes_bancarias: adicionando colunas de origem")
+             try:
+                 cursor.execute("ALTER TABLE transacoes_bancarias ADD COLUMN tipo_origem TEXT")
+                 cursor.execute("ALTER TABLE transacoes_bancarias ADD COLUMN conta_origem TEXT")
+                 conn.commit()
+             except Exception as e:
+                 # Se a tabela não existir, vai falhar silenciosamente aqui, mas o CREATE TABLE acima já resolveu
+                 pass
+        
 def crud_insert(table, data, log_msg=""):
     """Insere um registro no banco e retorna o ID."""
     columns = ', '.join(data.keys())
@@ -437,7 +526,25 @@ def crud_insert(table, data, log_msg=""):
     return row_id
 
 def crud_update(table, data, where_clause, params, log_msg=""):
-    """Atualiza registros no banco."""
+    """Atualiza registros no banco COM auditoria automática."""
+    
+    # NOVO: Buscar valores anteriores para auditoria (antes do UPDATE)
+    registro_id = None
+    valores_anteriores = None
+    try:
+        # Tentar obter registro_id do params
+        if params:
+            registro_id = params[0] if isinstance(params[0], int) else None
+        
+        # Buscar valores anteriores para comparar
+        select_query = f"SELECT * FROM {table} WHERE {where_clause}"
+        if adapter.USE_POSTGRES:
+            select_query = select_query.replace('?', '%s')
+        valores_anteriores = sql_get_query(select_query, params)
+    except Exception as e:
+        logger.debug(f"Não foi possível obter valores anteriores para auditoria: {e}")
+    
+    # Executar o UPDATE
     placeholders = ['%s' if adapter.USE_POSTGRES else '?' for _ in data]
     set_clause = ', '.join([f"{k} = {p}" for k, p in zip(data.keys(), placeholders)])
     
@@ -445,16 +552,30 @@ def crud_update(table, data, where_clause, params, log_msg=""):
     
     # Ajustar placeholders do where_clause se for Postgres
     if adapter.USE_POSTGRES:
-        # Substituição mais segura: apenas se o where_clause usar ?
-        # Idealmente, o caller já deveria passar %s se soubesse que é Postgres,
-        # mas para manter compatibilidade com código existente que usa ?, fazemos replace.
-        # Risco: Se houver '?' literal na string de busca, vai quebrar.
-        # Solução: Assumimos que where_clause é estrutural (ex: "id = ?") e params contém os dados.
         query = query.replace('?', '%s')
     
     full_params = tuple(data.values()) + tuple(params)
     adapter.get_adapter().execute_query(query, full_params)
     logger.info(log_msg)
+    
+    # NOVO: Registrar alterações na auditoria
+    if valores_anteriores is not None and not valores_anteriores.empty:
+        try:
+            row_anterior = valores_anteriores.iloc[0]
+            for campo, valor_novo in data.items():
+                valor_anterior = row_anterior.get(campo)
+                # Só registrar se realmente mudou
+                if str(valor_anterior) != str(valor_novo):
+                    audit_detalhado(
+                        tabela=table,
+                        registro_id=registro_id,
+                        campo=campo,
+                        valor_anterior=valor_anterior,
+                        valor_novo=valor_novo,
+                        acao="UPDATE"
+                    )
+        except Exception as e:
+            logger.debug(f"Erro ao registrar auditoria: {e}")
     
     # Emitir sinal
     if signals:
@@ -544,9 +665,83 @@ def gerar_documento_final(id_modelo, dados_cliente):
             
     return conteudo
 
+def busca_global(termo: str, limite: int = 20) -> dict:
+    """
+    Busca termo em clientes, processos e financeiro simultaneamente.
+    
+    Args:
+        termo: Texto a buscar
+        limite: Máximo de resultados por categoria
+    
+    Returns:
+        dict: {
+            'clientes': DataFrame,
+            'processos': DataFrame,
+            'financeiro': DataFrame,
+            'total': int
+        }
+    """
+    resultado = {
+        'clientes': pd.DataFrame(), 
+        'processos': pd.DataFrame(), 
+        'financeiro': pd.DataFrame(),
+        'total': 0
+    }
+    
+    if not termo or len(termo) < 2:
+        return resultado
+    
+    termo_like = f"%{termo}%"
+    
+    try:
+        # Buscar em clientes
+        resultado['clientes'] = sql_get_query("""
+            SELECT id, nome, cpf_cnpj, telefone, email, 'cliente' as tipo_resultado
+            FROM clientes 
+            WHERE nome LIKE ? OR cpf_cnpj LIKE ? OR email LIKE ? OR telefone LIKE ?
+            ORDER BY nome ASC
+            LIMIT ?
+        """, (termo_like, termo_like, termo_like, termo_like, limite))
+    except Exception as e:
+        logger.debug(f"Erro na busca de clientes: {e}")
+    
+    try:
+        # Buscar em processos
+        resultado['processos'] = sql_get_query("""
+            SELECT id, numero, cliente_nome, acao, fase_processual, 'processo' as tipo_resultado
+            FROM processos 
+            WHERE numero LIKE ? OR cliente_nome LIKE ? OR acao LIKE ? OR obs LIKE ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (termo_like, termo_like, termo_like, termo_like, limite))
+    except Exception as e:
+        logger.debug(f"Erro na busca de processos: {e}")
+    
+    try:
+        # Buscar em financeiro
+        resultado['financeiro'] = sql_get_query("""
+            SELECT id, descricao, cliente, valor, tipo, status, 'financeiro' as tipo_resultado
+            FROM financeiro 
+            WHERE descricao LIKE ? OR cliente LIKE ? OR categoria LIKE ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (termo_like, termo_like, termo_like, limite))
+    except Exception as e:
+        logger.debug(f"Erro na busca de financeiro: {e}")
+    
+    # Calcular total
+    resultado['total'] = (
+        len(resultado['clientes']) + 
+        len(resultado['processos']) + 
+        len(resultado['financeiro'])
+    )
+    
+    return resultado
+
 def get_agenda_eventos():
     """Retorna eventos da agenda."""
     return sql_get("agenda")
+
 
 def get_connection():
     """Retorna conexão com o banco de dados (wrapper para adapter)."""
@@ -642,37 +837,233 @@ def cpf_existe(cpf_cnpj):
     res = adapter.get_adapter().fetch_one(query, (cpf_cnpj,))
     return res is not None
 
-def criar_backup():
-    """Cria um backup do banco de dados (apenas SQLite)."""
-    if adapter.USE_POSTGRES:
-        # Backups no Postgres/Supabase são gerenciados pela plataforma
-        return
+def criar_backup(force: bool = False) -> dict:
+    """
+    Cria um backup do banco de dados com melhorias Sprint 3.
+    
+    Features:
+    - Compressão gzip para economizar espaço
+    - Rotação automática (mantém últimos 7 dias)
+    - Verificação de integridade
+    - Log de auditoria
+    
+    Args:
+        force: Forçar backup mesmo se já existe um do dia
         
+    Returns:
+        dict: {'success': bool, 'file': str, 'size_mb': float, 'message': str}
+    """
     import shutil
     import os
+    import gzip
+    import hashlib
+    
+    result = {'success': False, 'file': None, 'size_mb': 0, 'message': ''}
+    
+    if adapter.USE_POSTGRES:
+        # Backups no Postgres/Supabase são gerenciados pela plataforma
+        result['message'] = 'PostgreSQL: backups gerenciados pela plataforma'
+        return result
+        
+    try:
+        db_file = 'sistema.db'
+        if not os.path.exists(db_file):
+            result['message'] = 'Banco de dados não encontrado'
+            return result
+            
+        backup_dir = 'backups'
+        if not os.path.exists(backup_dir):
+            os.makedirs(backup_dir)
+        
+        # Verificar se já existe backup do dia (evitar duplicados)
+        today = datetime.now().strftime('%Y%m%d')
+        existing_today = [f for f in os.listdir(backup_dir) if today in f]
+        
+        if existing_today and not force:
+            result['message'] = f'Backup do dia já existe: {existing_today[0]}'
+            result['success'] = True  # Não é erro, apenas skip
+            return result
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_file = f"{backup_dir}/sistema_backup_{timestamp}.db.gz"
+        backup_temp = f"{backup_dir}/sistema_backup_{timestamp}.db"
+        
+        # 1. Copiar banco de dados
+        shutil.copy2(db_file, backup_temp)
+        
+        # 2. Verificar integridade do backup
+        original_size = os.path.getsize(db_file)
+        backup_size = os.path.getsize(backup_temp)
+        
+        if backup_size != original_size:
+            os.remove(backup_temp)
+            result['message'] = 'Erro: tamanho do backup não corresponde ao original'
+            return result
+        
+        # 3. Compactar com gzip
+        with open(backup_temp, 'rb') as f_in:
+            with gzip.open(backup_file, 'wb', compresslevel=9) as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        
+        # Remover arquivo temporário não compactado
+        os.remove(backup_temp)
+        
+        # 4. Calcular hash para verificação futura
+        with gzip.open(backup_file, 'rb') as f:
+            file_hash = hashlib.md5(f.read()).hexdigest()
+        
+        # Salvar hash em arquivo separado
+        with open(f"{backup_file}.md5", 'w') as f:
+            f.write(file_hash)
+        
+        compressed_size = os.path.getsize(backup_file)
+        compression_ratio = (1 - compressed_size / original_size) * 100 if original_size > 0 else 0
+        
+        logger.info(
+            f"Backup criado: {backup_file} | "
+            f"Original: {original_size/1024/1024:.2f}MB | "
+            f"Compactado: {compressed_size/1024/1024:.2f}MB | "
+            f"Compressão: {compression_ratio:.1f}%"
+        )
+        
+        # 5. Rotação: manter últimos 7 backups
+        backups = sorted([
+            f for f in os.listdir(backup_dir) 
+            if f.startswith('sistema_backup_') and f.endswith('.db.gz')
+        ])
+        
+        while len(backups) > 7:
+            old_backup = backups.pop(0)
+            old_path = os.path.join(backup_dir, old_backup)
+            old_md5 = f"{old_path}.md5"
+            
+            os.remove(old_path)
+            if os.path.exists(old_md5):
+                os.remove(old_md5)
+            
+            logger.info(f"Backup antigo removido (rotação): {old_backup}")
+        
+        # 6. Log de auditoria
+        try:
+            audit('backup_created', {
+                'file': backup_file,
+                'size_mb': round(compressed_size / 1024 / 1024, 2),
+                'hash': file_hash,
+                'compression': f'{compression_ratio:.1f}%'
+            })
+        except:
+            pass  # Não falhar se auditoria falhar
+        
+        result['success'] = True
+        result['file'] = backup_file
+        result['size_mb'] = round(compressed_size / 1024 / 1024, 2)
+        result['message'] = f'Backup criado com sucesso ({compression_ratio:.1f}% compressão)'
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Erro ao criar backup: {e}")
+        result['message'] = str(e)
+        return result
+
+def verificar_backup(backup_file: str) -> bool:
+    """
+    Verifica integridade de um backup.
+    
+    Args:
+        backup_file: Caminho do arquivo de backup (.db.gz)
+        
+    Returns:
+        True se backup está íntegro
+    """
+    import gzip
+    import hashlib
+    
+    try:
+        md5_file = f"{backup_file}.md5"
+        
+        if not os.path.exists(md5_file):
+            logger.warning(f"Arquivo MD5 não encontrado para {backup_file}")
+            return False
+        
+        # Ler hash esperado
+        with open(md5_file, 'r') as f:
+            expected_hash = f.read().strip()
+        
+        # Calcular hash atual
+        with gzip.open(backup_file, 'rb') as f:
+            actual_hash = hashlib.md5(f.read()).hexdigest()
+        
+        if actual_hash == expected_hash:
+            logger.info(f"Backup verificado OK: {backup_file}")
+            return True
+        else:
+            logger.error(f"Backup CORROMPIDO: {backup_file}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Erro ao verificar backup: {e}")
+        return False
+
+def restaurar_backup(backup_file: str) -> bool:
+    """
+    Restaura banco de dados a partir de um backup.
+    
+    Args:
+        backup_file: Caminho do arquivo de backup (.db.gz)
+        
+    Returns:
+        True se restauração foi bem-sucedida
+    """
+    import gzip
+    import shutil
+    
+    if adapter.USE_POSTGRES:
+        logger.error("Restauração não disponível para PostgreSQL")
+        return False
     
     try:
         db_file = 'sistema.db'
+        
+        # 1. Verificar integridade do backup
+        if not verificar_backup(backup_file):
+            return False
+        
+        # 2. Fazer backup do banco atual (segurança)
         if os.path.exists(db_file):
-            backup_dir = 'backups'
-            if not os.path.exists(backup_dir):
-                os.makedirs(backup_dir)
-            
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            backup_file = f"{backup_dir}/sistema_backup_{timestamp}.db"
-            shutil.copy2(db_file, backup_file)
-            logger.info(f"Backup criado com sucesso: {backup_file}")
-            
-            # Manter apenas os últimos 5 backups
-            backups = sorted([f for f in os.listdir(backup_dir) if f.startswith('sistema_backup_')])
-            while len(backups) > 5:
-                os.remove(os.path.join(backup_dir, backups.pop(0)))
+            shutil.copy2(db_file, f'{db_file}.before_restore_{timestamp}')
+        
+        # 3. Descompactar e restaurar
+        with gzip.open(backup_file, 'rb') as f_in:
+            with open(db_file, 'wb') as f_out:
+                shutil.copyfileobj(f_in, f_out)
+        
+        logger.info(f"Banco restaurado de: {backup_file}")
+        
+        # 4. Auditoria
+        try:
+            audit('backup_restored', {'file': backup_file})
+        except:
+            pass
+        
+        return True
+        
     except Exception as e:
-        logger.error(f"Erro ao criar backup: {e}")
+        logger.error(f"Erro ao restaurar backup: {e}")
+        return False
+
+
 
 def audit(action, details, user_id=None, username=None):
     """Registra um evento de auditoria."""
     try:
+        import json
+        
+        # Converter dict para JSON string (compatibilidade PostgreSQL)
+        if isinstance(details, dict):
+            details = json.dumps(details, default=str)
+        
         # Tentar pegar do contexto do Streamlit se não fornecido
         if not user_id or not username:
              import streamlit as st
@@ -684,6 +1075,117 @@ def audit(action, details, user_id=None, username=None):
         sql_run(query, (user_id, username, action, details))
     except Exception as e:
         logger.error(f"Erro ao auditar: {e}")
+
+
+def log_acesso_dados(tabela: str, registro_id: int, tipo_acesso: str = "VIEW"):
+    """
+    Registra acesso a dados pessoais conforme LGPD Art. 37.
+    
+    Args:
+        tabela: Nome da tabela acessada (clientes, processos, etc.)
+        registro_id: ID do registro acessado
+        tipo_acesso: Tipo de acesso (VIEW, EXPORT, PRINT)
+    """
+    try:
+        import streamlit as st
+        user_id = None
+        username = "Anônimo"
+        
+        if hasattr(st, 'session_state'):
+            username = st.session_state.get('user', 'Sistema')
+            if 'user_data' in st.session_state:
+                user_id = st.session_state.user_data.get('id')
+        
+        audit(
+            action=f"ACESSO_DADOS_{tipo_acesso}",
+            details=f"Acesso a {tabela} ID {registro_id}",
+            user_id=user_id,
+            username=username
+        )
+        logger.debug(f"Log LGPD: {username} acessou {tabela}#{registro_id} ({tipo_acesso})")
+        
+    except Exception as e:
+        # Não deixar erro de log quebrar a aplicação
+        logger.debug(f"Erro no log_acesso_dados: {e}")
+
+def audit_detalhado(tabela, registro_id, campo, valor_anterior, valor_novo, acao="UPDATE"):
+    """
+    Registra alteração detalhada para auditoria completa.
+    
+    Args:
+        tabela: Nome da tabela alterada
+        registro_id: ID do registro alterado
+        campo: Nome do campo alterado
+        valor_anterior: Valor antes da alteração
+        valor_novo: Novo valor
+        acao: Tipo de ação (INSERT, UPDATE, DELETE)
+    """
+    try:
+        import streamlit as st
+        username = "Sistema"
+        user_id = None
+        
+        if hasattr(st, 'session_state'):
+            username = st.session_state.get('user', 'Sistema')
+            if 'user_data' in st.session_state:
+                user_id = st.session_state.user_data.get('id')
+        
+        query = """
+            INSERT INTO audit_logs 
+            (user_id, username, action, tabela, registro_id, campo, valor_anterior, valor_novo, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        
+        # Limitar tamanho dos valores para não sobrecarregar o banco
+        val_ant = str(valor_anterior)[:500] if valor_anterior is not None else None
+        val_novo = str(valor_novo)[:500] if valor_novo is not None else None
+        
+        sql_run(query, (
+            user_id, 
+            username, 
+            acao, 
+            tabela, 
+            registro_id, 
+            campo, 
+            val_ant, 
+            val_novo,
+            datetime.now().isoformat()
+        ))
+        
+        logger.debug(f"Auditoria: {acao} em {tabela}.{campo} (ID {registro_id})")
+        
+    except Exception as e:
+        # Não deixar erro de auditoria quebrar a operação principal
+        logger.debug(f"Erro no audit_detalhado: {e}")
+
+def get_audit_logs(limite=100, filtro_tabela=None, filtro_usuario=None):
+    """
+    Retorna histórico de auditoria com filtros opcionais.
+    
+    Args:
+        limite: Número máximo de registros
+        filtro_tabela: Filtrar por tabela específica
+        filtro_usuario: Filtrar por usuário específico
+    
+    Returns:
+        DataFrame com os logs de auditoria
+    """
+    query = "SELECT * FROM audit_logs WHERE 1=1"
+    params = []
+    
+    if filtro_tabela:
+        query += " AND tabela = ?"
+        params.append(filtro_tabela)
+    
+    if filtro_usuario:
+        query += " AND username = ?"
+        params.append(filtro_usuario)
+    
+    query += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(limite)
+    
+    return sql_get_query(query, tuple(params))
+
 
 def get_usuario_by_username(username):
     """Retorna dados de um usuário pelo username."""

@@ -9,7 +9,7 @@ import database as db
 import google_calendar as gc
 import utils as ut
 import urllib.parse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import pandas as pd
 import calendar as cal
 
@@ -172,44 +172,246 @@ def render_lista_eventos():
     """Renderiza lista completa de eventos"""
     st.subheader("📋 Todos os Eventos")
     
-    # Filtros
+    # Buscar todos os eventos primeiro (para notificações e filtros)
+    todos_eventos_df = db.get_agenda_eventos()
+    
+    # === NOTIFICAÇÃO DE EVENTOS PRÓXIMOS (24h) ===
+    if not todos_eventos_df.empty:
+        agora = datetime.now()
+        amanha = (agora + timedelta(hours=24)).strftime('%Y-%m-%d %H:%M')
+        hoje_str = agora.strftime('%Y-%m-%d')
+        
+        # Filtrar eventos pendentes nas próximas 24h
+        eventos_24h = todos_eventos_df[
+            (todos_eventos_df['status'] == 'pendente') & 
+            (todos_eventos_df['data_evento'] >= hoje_str) &
+            (todos_eventos_df['data_evento'] <= (agora + timedelta(days=1)).strftime('%Y-%m-%d'))
+        ]
+        
+        if len(eventos_24h) > 0:
+            st.warning(f"⚠️ **ATENÇÃO:** {len(eventos_24h)} evento(s) nas próximas 24 horas!")
+            with st.expander("Ver eventos urgentes"):
+                for _, ev in eventos_24h.iterrows():
+                    hora = ev.get('hora_evento', '')
+                    st.markdown(f"• **{ev['titulo']}** - {ev['data_evento']} {hora}")
+    
+    # === CAMPO DE BUSCA ===
+    busca = st.text_input("🔍 Buscar por título", placeholder="Digite para pesquisar...")
+    
+    # === FILTROS RÁPIDOS ===
+    st.markdown("**Filtros rápidos:**")
+    col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
+    with col_btn1:
+        if st.button("📅 Hoje", use_container_width=True):
+            st.session_state['filtro_rapido'] = 'hoje'
+    with col_btn2:
+        if st.button("⚡ Amanhã", use_container_width=True):
+            st.session_state['filtro_rapido'] = 'amanha'
+    with col_btn3:
+        if st.button("📆 7 dias", use_container_width=True):
+            st.session_state['filtro_rapido'] = '7dias'
+    with col_btn4:
+        if st.button("🔄 Limpar", use_container_width=True):
+            st.session_state['filtro_rapido'] = None
+    
+    st.markdown("---")
+    
+    # Filtros regulares
     col1, col2, col3 = st.columns(3)
     
     with col1:
         filtro_tipo = st.selectbox("Tipo", ["Todos", "prazo", "audiencia", "tarefa"])
     with col2:
-        filtro_status = st.selectbox("Status", ["Todos", "pendente", "concluido", "cancelado"], index=1)  # Padrão: pendente
+        filtro_status = st.selectbox("Status", ["Todos", "pendente", "concluido", "cancelado"], index=1)
     with col3:
-        filtro_periodo = st.selectbox("Período", ["Próximos 7 dias", "Próximos 30 dias", "Todos"])
+        filtro_periodo = st.selectbox("Período", ["Hoje", "Amanhã", "Próximos 7 dias", "Próximos 30 dias", "Todos"])
     
-    # Buscar eventos
-    eventos_df = db.get_agenda_eventos()
+    # === BOTÕES DE EXPORTAÇÃO ===
+    col_exp1, col_exp2 = st.columns(2)
+    with col_exp1:
+        exportar_excel = st.button("📊 Exportar Excel", use_container_width=True)
+    with col_exp2:
+        exportar_pdf = st.button("📄 Exportar PDF", use_container_width=True)
     
-    if not eventos_df.empty:
-        # Aplicar filtros
+    if not todos_eventos_df.empty:
+        eventos_df = todos_eventos_df.copy()
+        
+        # Aplicar filtro rápido se existir
+        filtro_rapido = st.session_state.get('filtro_rapido')
+        hoje = datetime.now().strftime('%Y-%m-%d')
+        amanha_str = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+        
+        if filtro_rapido == 'hoje':
+            eventos_df = eventos_df[eventos_df['data_evento'] == hoje]
+        elif filtro_rapido == 'amanha':
+            eventos_df = eventos_df[eventos_df['data_evento'] == amanha_str]
+        elif filtro_rapido == '7dias':
+            data_limite = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
+            eventos_df = eventos_df[(eventos_df['data_evento'] >= hoje) & (eventos_df['data_evento'] <= data_limite)]
+        
+        # Aplicar busca por título
+        if busca:
+            eventos_df = eventos_df[eventos_df['titulo'].str.contains(busca, case=False, na=False)]
+        
+        # Aplicar filtros regulares
         if filtro_tipo != "Todos":
             eventos_df = eventos_df[eventos_df['tipo'] == filtro_tipo]
         
         if filtro_status != "Todos":
             eventos_df = eventos_df[eventos_df['status'] == filtro_status]
         
-        if filtro_periodo == "Próximos 7 dias":
+        # Filtrar por período
+        if filtro_periodo == "Hoje":
+            eventos_df = eventos_df[eventos_df['data_evento'] == hoje]
+        elif filtro_periodo == "Amanhã":
+            eventos_df = eventos_df[eventos_df['data_evento'] == amanha_str]
+        elif filtro_periodo == "Próximos 7 dias":
             data_limite = (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')
-            eventos_df = eventos_df[eventos_df['data_evento'] <= data_limite]
+            eventos_df = eventos_df[(eventos_df['data_evento'] >= hoje) & (eventos_df['data_evento'] <= data_limite)]
         elif filtro_periodo == "Próximos 30 dias":
             data_limite = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
-            eventos_df = eventos_df[eventos_df['data_evento'] <= data_limite]
+            eventos_df = eventos_df[(eventos_df['data_evento'] >= hoje) & (eventos_df['data_evento'] <= data_limite)]
         
-        # Ordenar por data
-        eventos_df = eventos_df.sort_values('data_evento')
+        # Ordenar por data e hora
+        eventos_df = eventos_df.sort_values(['data_evento', 'hora_evento'])
+        
+        # === EXPORTAÇÃO ===
+        if exportar_excel and not eventos_df.empty:
+            try:
+                import io
+                output = io.BytesIO()
+                eventos_df.to_excel(output, index=False, engine='openpyxl')
+                st.download_button(
+                    "⬇️ Download Excel",
+                    data=output.getvalue(),
+                    file_name=f"agenda_{hoje}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            except Exception as e:
+                st.error(f"Erro ao exportar: {e}")
+        
+        if exportar_pdf and not eventos_df.empty:
+            try:
+                from reportlab.lib.pagesizes import A4
+                from reportlab.pdfgen import canvas
+                import io
+                
+                buffer = io.BytesIO()
+                c = canvas.Canvas(buffer, pagesize=A4)
+                c.setFont("Helvetica-Bold", 16)
+                c.drawString(50, 800, f"Agenda - {hoje}")
+                c.setFont("Helvetica", 10)
+                
+                y = 770
+                for _, ev in eventos_df.iterrows():
+                    if y < 50:
+                        c.showPage()
+                        y = 800
+                    hora = ev.get('hora_evento', '')
+                    linha = f"{ev['data_evento']} {hora} - {ev['titulo']} [{ev['status']}]"
+                    c.drawString(50, y, linha[:80])
+                    y -= 15
+                
+                c.save()
+                buffer.seek(0)
+                st.download_button(
+                    "⬇️ Download PDF",
+                    data=buffer.getvalue(),
+                    file_name=f"agenda_{hoje}.pdf",
+                    mime="application/pdf"
+                )
+            except ImportError:
+                st.warning("Biblioteca reportlab não instalada. Use: pip install reportlab")
+            except Exception as e:
+                st.error(f"Erro ao gerar PDF: {e}")
         
         # Exibir eventos
         st.info(f"Total: {len(eventos_df)} evento(s)")
         
         for idx, evento in eventos_df.iterrows():
-            render_card_evento(evento)
+            # Verificar se está em modo edição
+            if st.session_state.get(f'editing_{evento["id"]}', False):
+                render_form_edicao(evento)
+            else:
+                render_card_evento(evento)
     else:
         st.info("Nenhum evento cadastrado.")
+
+
+def render_form_edicao(evento):
+    """Renderiza formulário de edição de evento"""
+    with st.container():
+        st.markdown(f"### ✏️ Editando: {evento['titulo']}")
+        
+        with st.form(f"form_edit_{evento['id']}"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                titulo = st.text_input("Título *", value=evento.get('titulo', ''))
+                data_evento = st.date_input(
+                    "Data *", 
+                    value=datetime.strptime(evento['data_evento'], '%Y-%m-%d').date() if evento.get('data_evento') else datetime.now().date()
+                )
+                hora_atual = evento.get('hora_evento')
+                if hora_atual:
+                    try:
+                        h, m = hora_atual.split(':')
+                        hora_valor = dt_time(int(h), int(m))
+                    except:
+                        hora_valor = dt_time(9, 0)
+                else:
+                    hora_valor = dt_time(9, 0)
+                hora_evento = st.time_input("Horário", value=hora_valor)
+            
+            with col2:
+                tipo = st.selectbox("Tipo", ["tarefa", "prazo", "audiencia"], 
+                                   index=["tarefa", "prazo", "audiencia"].index(evento.get('tipo', 'tarefa')) if evento.get('tipo') in ["tarefa", "prazo", "audiencia"] else 0)
+                prioridade = st.selectbox("Prioridade", ["baixa", "media", "alta", "urgente"],
+                                         index=["baixa", "media", "alta", "urgente"].index(evento.get('prioridade', 'media')) if evento.get('prioridade') in ["baixa", "media", "alta", "urgente"] else 1)
+                status = st.selectbox("Status", ["pendente", "concluido", "cancelado"],
+                                     index=["pendente", "concluido", "cancelado"].index(evento.get('status', 'pendente')) if evento.get('status') in ["pendente", "concluido", "cancelado"] else 0)
+            
+            descricao = st.text_area("Descrição", value=evento.get('descricao', '') or '')
+            responsavel = st.text_input("Responsável", value=evento.get('responsavel', '') or '')
+            
+            col_btn1, col_btn2 = st.columns(2)
+            with col_btn1:
+                salvar = st.form_submit_button("💾 Salvar", type="primary", use_container_width=True)
+            with col_btn2:
+                cancelar = st.form_submit_button("❌ Cancelar", use_container_width=True)
+            
+            if salvar:
+                dados_atualizados = {
+                    'titulo': titulo,
+                    'data_evento': data_evento.strftime('%Y-%m-%d'),
+                    'hora_evento': hora_evento.strftime('%H:%M'),
+                    'tipo': tipo,
+                    'prioridade': prioridade,
+                    'status': status,
+                    'descricao': descricao,
+                    'responsavel': responsavel
+                }
+                db.crud_update('agenda', dados_atualizados, 'id = ?', (evento['id'],), f"Evento {evento['id']} atualizado")
+                
+                # Sincronizar com Google Calendar se o evento tiver ID do Google
+                if evento.get('google_calendar_id'):
+                    try:
+                        username = st.session_state.get('user', 'admin')
+                        gc.sincronizar_evento(username, evento['id'], dados_atualizados, operacao='atualizar')
+                        st.success("✅ Evento atualizado localmente e no Google Calendar!")
+                    except Exception as e:
+                        st.warning(f"Evento atualizado localmente, mas houve erro na sincronização com Google: {e}")
+                else:
+                    st.success("✅ Evento atualizado com sucesso!")
+                
+                st.session_state[f'editing_{evento["id"]}'] = False
+                st.rerun()
+            
+            if cancelar:
+                st.session_state[f'editing_{evento["id"]}'] = False
+                st.rerun()
+        
+        st.markdown("---")
 
 
 def gerar_link_lembrete_whatsapp(evento, telefone=None):
@@ -315,12 +517,32 @@ def render_card_evento(evento):
     except:
         dias_badge = ""
     
+    # Estilo do card com borda colorida por prioridade
+    st.markdown(f"""
+        <style>
+        .card-prioridade-{evento['id']} {{
+            border-left: 5px solid {cor};
+            padding-left: 15px;
+            margin-bottom: 10px;
+        }}
+        </style>
+    """, unsafe_allow_html=True)
+    
     with st.container():
-        col1, col2, col3, col4 = st.columns([5, 2, 1.5, 1.5])
+        st.markdown(f'<div class="card-prioridade-{evento["id"]}">', unsafe_allow_html=True)
+        
+        col1, col2, col3, col4, col5 = st.columns([4, 2, 1, 1, 1])
         
         with col1:
+            # Badge de prioridade colorido
+            prioridade = evento.get('prioridade', 'media')
+            prioridade_labels = {"baixa": "🟢 Baixa", "media": "🟡 Média", "alta": "🟠 Alta", "urgente": "🔴 Urgente"}
+            prioridade_label = prioridade_labels.get(prioridade, "")
+            
             st.markdown(f"### {icone} {evento['titulo']}")
-            st.caption(f"📅 {evento['data_evento']} | {status_icon} {evento['status'].upper()} | {dias_badge}")
+            # Incluir horário se disponível
+            hora_str = f" às {evento['hora_evento']}" if evento.get('hora_evento') else ""
+            st.caption(f"📅 {evento['data_evento']}{hora_str} | {status_icon} {evento['status'].upper()} | {dias_badge} | {prioridade_label}")
             if evento.get('descricao'):
                 st.markdown(evento['descricao'], unsafe_allow_html=True)
             if evento.get('responsavel'):
@@ -347,19 +569,59 @@ def render_card_evento(evento):
                 st.rerun()
         
         with col4:
-            # Botão concluir
+            # Botão concluir com confirmação
             if evento['status'] == 'pendente':
-                if st.button("✅", key=f"complete_{evento['id']}", help="Marcar como concluído"):
-                    db.crud_update(
-                        'agenda',
-                        {'status': 'concluido'},
-                        'id = ?',
-                        (evento['id'],),
-                        f"Evento {evento['id']} concluído"
-                    )
-                    st.success("Evento marcado como concluído!")
+                # Sistema de confirmação
+                confirmar_key = f"confirmar_concluir_{evento['id']}"
+                if st.session_state.get(confirmar_key, False):
+                    if st.button("✔️ Sim", key=f"confirm_yes_{evento['id']}", help="Confirmar"):
+                        db.crud_update(
+                            'agenda',
+                            {'status': 'concluido'},
+                            'id = ?',
+                            (evento['id'],),
+                            f"Evento {evento['id']} concluído"
+                        )
+                        st.session_state[confirmar_key] = False
+                        st.success("Evento concluído!")
+                        st.rerun()
+                else:
+                    if st.button("✅", key=f"complete_{evento['id']}", help="Marcar como concluído"):
+                        st.session_state[confirmar_key] = True
+                        st.rerun()
+        
+        with col5:
+            # Botão excluir com confirmação
+            excluir_key = f"confirmar_excluir_{evento['id']}"
+            if st.session_state.get(excluir_key, False):
+                if st.button("🗑️ Sim", key=f"delete_yes_{evento['id']}", help="Confirmar exclusão"):
+                    # Excluir do Google Calendar se tiver ID
+                    if evento.get('google_calendar_id'):
+                        try:
+                            username = st.session_state.get('user', 'admin')
+                            gc.sincronizar_evento(username, evento['id'], evento, operacao='excluir')
+                        except:
+                            pass  # Continuar mesmo se falhar no Google
+                    db.crud_delete('agenda', 'id = ?', (evento['id'],), f"Evento {evento['id']} excluído")
+                    st.session_state[excluir_key] = False
+                    st.success("Evento excluído!")
+                    st.rerun()
+            else:
+                if st.button("🗑️", key=f"delete_{evento['id']}", help="Excluir evento"):
+                    st.session_state[excluir_key] = True
                     st.rerun()
         
+        # Botões de cancelar confirmação (se alguma confirmação estiver ativa)
+        confirmar_concluir = st.session_state.get(f"confirmar_concluir_{evento['id']}", False)
+        confirmar_excluir = st.session_state.get(f"confirmar_excluir_{evento['id']}", False)
+        
+        if confirmar_concluir or confirmar_excluir:
+            if st.button("❌ Cancelar", key=f"cancel_action_{evento['id']}"):
+                st.session_state[f"confirmar_concluir_{evento['id']}"] = False
+                st.session_state[f"confirmar_excluir_{evento['id']}"] = False
+                st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
         st.markdown("---")
 
 
@@ -367,7 +629,11 @@ def render_novo_evento():
     """Renderiza formulário de novo evento"""
     st.subheader("➕ Cadastrar Novo Evento")
     
-    with st.form("form_novo_evento"):
+    # Contador para forçar reset do formulário após salvar
+    if 'form_reset_counter' not in st.session_state:
+        st.session_state['form_reset_counter'] = 0
+    
+    with st.form(f"form_novo_evento_{st.session_state['form_reset_counter']}"):
         col1, col2 = st.columns(2)
         
         with col1:
@@ -375,8 +641,7 @@ def render_novo_evento():
             titulo = st.text_input("Título *")
             data_evento = st.date_input("Data do Evento *", value=datetime.now())
             # Horário obrigatório com valor padrão 9:00
-            from datetime import time
-            hora_evento = st.time_input("Horário *", value=time(9, 0), help="Horário do compromisso (obrigatório)")
+            hora_evento = st.time_input("Horário *", value=dt_time(9, 0), help="Horário do compromisso (obrigatório)")
         
         with col2:
             prioridade = st.selectbox("Prioridade", ["baixa", "media", "alta", "urgente"])
@@ -401,60 +666,71 @@ def render_novo_evento():
         submitted = st.form_submit_button("💾 Salvar Evento", type="primary")
         
         if submitted:
+            # Proteção contra clique duplo
+            if st.session_state.get('salvando_evento', False):
+                st.warning("⚠️ Salvamento em andamento, aguarde...")
+                return
+            
             if not titulo:
                 st.error("O título é obrigatório!")
             else:
-                # Preparar dados
-                id_processo = None
-                if processo_selecionado != "Nenhum":
-                    proc = processos_df[processos_df['label'] == processo_selecionado]
-                    if not proc.empty:
-                        id_processo = int(proc.iloc[0]['id'])
-                
-                evento_data = {
-                    'tipo': tipo,
-                    'titulo': titulo,
-                    'descricao': descricao,
-                    'data_evento': data_evento.strftime('%Y-%m-%d'),
-                    'hora_evento': hora_evento.strftime('%H:%M'),  # Obrigatório
-                    'responsavel': responsavel,
-                    'id_processo': id_processo,
-                    'status': 'pendente',
-                    'prioridade': prioridade,
-                    'cor': cor
-                }
-                
-                # Salvar no banco
-                evento_id = db.crud_insert('agenda', evento_data, f"Novo evento: {titulo}")
-                
-                # Sincronizar com Google Calendar se solicitado
-                google_event_id = None
-                if sync_google and evento_id:
-                    username = st.session_state.get('user', 'admin')
-                    try:
-                        google_event_id = gc.sincronizar_evento(
-                            username, evento_id, evento_data, operacao='criar'
-                        )
-                        
-                        if google_event_id:
-                            # Atualizar evento com ID do Google
-                            db.crud_update(
-                                'agenda',
-                                {'google_calendar_id': google_event_id},
-                                'id = ?',
-                                (evento_id,),
-                                f"Adicionado ID Google Calendar: {google_event_id}"
+                try:
+                    st.session_state['salvando_evento'] = True
+                    # Preparar dados
+                    id_processo = None
+                    if processo_selecionado != "Nenhum":
+                        proc = processos_df[processos_df['label'] == processo_selecionado]
+                        if not proc.empty:
+                            id_processo = int(proc.iloc[0]['id'])
+                    
+                    evento_data = {
+                        'tipo': tipo,
+                        'titulo': titulo,
+                        'descricao': descricao,
+                        'data_evento': data_evento.strftime('%Y-%m-%d'),
+                        'hora_evento': hora_evento.strftime('%H:%M'),  # Obrigatório
+                        'responsavel': responsavel,
+                        'id_processo': id_processo,
+                        'status': 'pendente',
+                        'prioridade': prioridade,
+                        'cor': cor
+                    }
+                    
+                    # Salvar no banco
+                    evento_id = db.crud_insert('agenda', evento_data, f"Novo evento: {titulo}")
+                    
+                    # Sincronizar com Google Calendar se solicitado
+                    google_event_id = None
+                    if sync_google and evento_id:
+                        username = st.session_state.get('user', 'admin')
+                        try:
+                            google_event_id = gc.sincronizar_evento(
+                                username, evento_id, evento_data, operacao='criar'
                             )
-                            st.success(f"✅ Evento criado e sincronizado com Google Calendar!")
-                        else:
-                            st.warning("Evento criado, mas não foi possível sincronizar com Google Calendar. Verifique se você está autenticado.")
-                    except Exception as e:
-                        st.warning(f"Evento criado localmente, mas houve erro na sincronização com Google: {e}")
-                else:
-                    st.success(f"✅ Evento criado com sucesso!")
-                
-                st.balloons()
-                st.rerun()
+                            
+                            if google_event_id:
+                                # Atualizar evento com ID do Google
+                                db.crud_update(
+                                    'agenda',
+                                    {'google_calendar_id': google_event_id},
+                                    'id = ?',
+                                    (evento_id,),
+                                    f"Adicionado ID Google Calendar: {google_event_id}"
+                                )
+                                st.success(f"✅ Evento criado e sincronizado com Google Calendar!")
+                            else:
+                                st.warning("Evento criado, mas não foi possível sincronizar com Google Calendar. Verifique se você está autenticado.")
+                        except Exception as e:
+                            st.warning(f"Evento criado localmente, mas houve erro na sincronização com Google: {e}")
+                    else:
+                        st.success(f"✅ Evento criado com sucesso!")
+                    
+                    # Incrementar contador para limpar formulário
+                    st.session_state['form_reset_counter'] += 1
+                    st.balloons()
+                    st.rerun()
+                finally:
+                    st.session_state['salvando_evento'] = False
 
 
 def render_config_google():
@@ -503,15 +779,17 @@ def render_config_google():
                     if eventos:
                         st.info(f"Encontrados {len(eventos)} eventos no Google Calendar. Verificando duplicatas...")
                         importados = 0
+                        
+                        # OTIMIZAÇÃO: Buscar existentes UMA VEZ antes do loop
+                        eventos_existentes = db.sql_get('agenda')
+                        ids_existentes = set()
+                        if not eventos_existentes.empty and 'google_calendar_id' in eventos_existentes.columns:
+                            ids_existentes = set(eventos_existentes['google_calendar_id'].dropna().tolist())
+                        
                         for evento in eventos:
-                            # Verificar se já existe
-                            eventos_existentes = db.sql_get('agenda')
-                            if not eventos_existentes.empty:
-                                existe = eventos_existentes[
-                                    eventos_existentes['google_calendar_id'] == evento['google_calendar_id']
-                                ]
-                                if not existe.empty:
-                                    continue
+                            # Verificar se já existe (busca otimizada)
+                            if evento['google_calendar_id'] in ids_existentes:
+                                continue
                             
                             # Inserir evento
                             db.crud_insert('agenda', evento, f"Importado do Google: {evento['titulo']}")

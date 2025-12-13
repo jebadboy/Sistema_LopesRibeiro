@@ -141,6 +141,24 @@ def revogar_token_publico(token):
         return False
 
 
+def excluir_token_publico(token):
+    """
+    Exclui um token permanentemente do banco de dados.
+    
+    Args:
+        token: Token a ser excluído
+    
+    Returns:
+        bool: True se excluído com sucesso, False caso contrário
+    """
+    try:
+        query = "DELETE FROM tokens_publicos WHERE token = ?"
+        return db.sql_run(query, (token,))
+    except Exception as e:
+        logger.error(f"Erro ao excluir token: {e}")
+        return False
+
+
 def listar_tokens_processo(id_processo):
     """
     Lista todos os tokens ativos de um processo.

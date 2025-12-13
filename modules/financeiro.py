@@ -2,10 +2,18 @@ import streamlit as st
 import database as db
 import utils as ut
 import pandas as pd
+import io
+import base64
+import logging
+import crypto
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 import utils_recibo as ur
 import urllib.parse
+import utils_email
+import email_templates
+
+logger = logging.getLogger(__name__)
 
 def render():
     st.markdown("<h1 style='color: var(--text-main);'>💰 Gestão Financeira</h1>", unsafe_allow_html=True)
@@ -15,7 +23,7 @@ def render():
     render_dashboard_header()
     
     # --- ABAS PRINCIPAIS ---
-    t1, t2, t3 = st.tabs(["📝 Lançamentos & Extrato", "📊 Relatórios Gerenciais", "🧾 Emitir Recibo"])
+    t1, t2, t3, t4 = st.tabs(["📝 Lançamentos & Extrato", "📊 Relatórios", "🧾 Recibo", "📥 Importar"])
     
     with t1:
         render_lancamentos_tab()
@@ -25,6 +33,9 @@ def render():
 
     with t3:
         render_recibos_tab()
+    
+    with t4:
+        render_importar_tab()
 
 def render_dashboard_header():
     """Renderiza os Big Numbers e Gráfico Resumo no topo."""
@@ -66,11 +77,55 @@ def render_dashboard_header():
         (df['vencimento'] < pd.Timestamp(hoje.date()))
     ]['valor'].sum()
     
-    # Renderizar Metrics
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Saldo do Mês (Caixa)", ut.formatar_moeda(saldo_mes), delta=ut.formatar_moeda(entradas_pagas), delta_color="normal")
+    # 4. Comparativo com Mês Anterior
+    mes_anterior = hoje.month - 1 if hoje.month > 1 else 12
+    ano_anterior = hoje.year if hoje.month > 1 else hoje.year - 1
+    
+    df_mes_ant = df[
+        (df['vencimento'].dt.month == mes_anterior) & 
+        (df['vencimento'].dt.year == ano_anterior)
+    ]
+    
+    entradas_mes_ant = df_mes_ant[(df_mes_ant['tipo'] == 'Entrada') & (df_mes_ant['status_pagamento'] == 'Pago')]['valor'].sum()
+    saidas_mes_ant = df_mes_ant[(df_mes_ant['tipo'] == 'Saída') & (df_mes_ant['status_pagamento'] == 'Pago')]['valor'].sum()
+    saldo_mes_ant = entradas_mes_ant - saidas_mes_ant
+    
+    # Calcular variação percentual
+    variacao_saldo = ((saldo_mes - saldo_mes_ant) / saldo_mes_ant * 100) if saldo_mes_ant != 0 else 0
+    
+    # 5. Alertas de Vencimentos Próximos (7 dias)
+    data_limite_alerta = hoje + timedelta(days=7)
+    vencimentos_proximos = df[
+        (df['status_pagamento'] == 'Pendente') & 
+        (df['vencimento'] >= pd.Timestamp(hoje.date())) &
+        (df['vencimento'] <= pd.Timestamp(data_limite_alerta.date()))
+    ]
+    qtd_venc_proximos = len(vencimentos_proximos)
+    valor_venc_proximos = vencimentos_proximos['valor'].sum()
+    
+    # Renderizar Metrics (expandido para 4 colunas)
+    c1, c2, c3, c4 = st.columns(4)
+    
+    # Saldo com comparativo
+    delta_saldo = f"{variacao_saldo:+.1f}% vs mês ant." if saldo_mes_ant != 0 else None
+    c1.metric("Saldo do Mês (Caixa)", ut.formatar_moeda(saldo_mes), delta=delta_saldo)
+    
     c2.metric("Previsão (Competência)", ut.formatar_moeda(previsao_mes), help="Considera tudo que vence neste mês, pago ou não.")
-    c3.metric("Inadimplência Total", ut.formatar_moeda(inadimplencia), delta="-Atrasados", delta_color="inverse")
+    c3.metric("Inadimplência Total", ut.formatar_moeda(inadimplencia), delta="-Atrasados" if inadimplencia > 0 else None, delta_color="inverse")
+    c4.metric("📅 Venc. Próximos (7d)", f"{qtd_venc_proximos} ({ut.formatar_moeda(valor_venc_proximos)})", 
+              delta="⚠️ Atenção" if qtd_venc_proximos > 0 else "✅ OK",
+              delta_color="inverse" if qtd_venc_proximos > 0 else "normal")
+    
+    # Alerta visual se houver vencimentos
+    if qtd_venc_proximos > 0:
+        with st.expander(f"⚠️ {qtd_venc_proximos} vencimentos nos próximos 7 dias", expanded=False):
+            for _, v in vencimentos_proximos.iterrows():
+                icon = "💰" if v['tipo'] == 'Entrada' else "💸"
+                try:
+                    data_fmt = pd.to_datetime(v['vencimento']).strftime('%d/%m')
+                except:
+                    data_fmt = str(v['vencimento'])[:10]
+                st.write(f"{icon} **{data_fmt}** - {v['descricao'][:30]}... | {ut.formatar_moeda(v['valor'])}")
     
     st.divider()
     
@@ -87,11 +142,13 @@ def render_dashboard_header():
         # Agrupar por mês e tipo
         chart_data = df_chart.groupby(['mes_ano', 'tipo'])['valor'].sum().unstack().fillna(0)
         
-        # Garantir colunas
+        # Garantir colunas e ordem consistente
         if 'Entrada' not in chart_data.columns: chart_data['Entrada'] = 0
         if 'Saída' not in chart_data.columns: chart_data['Saída'] = 0
         
-        st.bar_chart(chart_data, color=["#ff4b4b", "#00cc96"] if 'Saída' in chart_data.columns and chart_data.columns[0] == 'Saída' else ["#00cc96", "#ff4b4b"])
+        # Reordenar para garantir cores corretas (Entrada primeiro = verde, Saída = vermelho)
+        chart_data = chart_data[['Entrada', 'Saída']]
+        st.bar_chart(chart_data, color=["#00cc96", "#ff4b4b"])
 
 def render_lancamentos_tab():
     c_form, c_extrato = st.columns([1, 2])
@@ -180,12 +237,10 @@ def render_form_lancamento():
         # Link do Comprovante
         comprovante_link = st.text_input("Link do Comprovante (Google Drive)", placeholder="Cole o link do arquivo ou pasta aqui")
         
-        # Parcelamento (Apenas para Entradas ou Saídas grandes)
-        parcelas = 1
-        if tipo == "Entrada":
-            parcelas = st.number_input("Parcelar em quantas vezes?", min_value=1, max_value=60, value=1)
-            if parcelas > 1:
-                st.caption(f"Serão gerados {parcelas} lançamentos de {ut.formatar_moeda(valor/parcelas)}")
+        # Parcelamento (Para Entradas E Saídas)
+        parcelas = st.number_input("Parcelar em quantas vezes?", min_value=1, max_value=60, value=1, key="parcelas_input")
+        if parcelas > 1:
+            st.caption(f"📑 Serão gerados {parcelas} lançamentos de {ut.formatar_moeda(valor/parcelas)}")
         
         c1, c2, c3, c4 = st.columns(4)
         status = c1.selectbox("Status", ["Pendente", "Pago"])
@@ -246,7 +301,9 @@ def render_form_lancamento():
                     db.crud_insert("financeiro", dados, f"Lançamento {tipo}")
 
                     # --- LÓGICA DE REPASSE DE PARCERIA ---
-                    if tipo == "Entrada" and id_processo_sel: # Usar id_processo_sel definido acima
+                    # CORREÇÃO: Calcular repasse apenas na PRIMEIRA parcela usando o valor TOTAL
+                    # Isso evita múltiplos lançamentos de repasse em parcelamentos
+                    if tipo == "Entrada" and id_processo_sel and i == 0:  # Apenas na primeira iteração
                         # Buscar dados do processo
                         proc_data = db.sql_get_query("SELECT parceiro_nome, parceiro_percentual FROM processos WHERE id=?", (id_processo_sel,))
                         if not proc_data.empty:
@@ -254,24 +311,25 @@ def render_form_lancamento():
                             p_pct = proc_data.iloc[0]['parceiro_percentual']
                             
                             if p_nome and p_pct > 0:
-                                valor_repasse = round(valor_parcela * (p_pct / 100), 2)
+                                # Usar VALOR TOTAL, não valor da parcela
+                                valor_repasse = round(valor * (p_pct / 100), 2)
                                 
-                                # Criar lançamento de saída (Repasse)
+                                # Criar lançamento de saída (Repasse) - único para todo o parcelamento
                                 dados_repasse = {
                                     "data": datetime.now().strftime("%Y-%m-%d"),
                                     "tipo": "Saída",
                                     "categoria": "Repasse de Parceria",
-                                    "descricao": f"Repasse {p_nome} - {desc_final}",
+                                    "descricao": f"Repasse {p_nome} - {descricao}",  # Sem número de parcela
                                     "valor": valor_repasse,
                                     "responsavel": "Sistema",
                                     "status_pagamento": "Pendente",
-                                    "vencimento": venc_atual.strftime("%Y-%m-%d"),
+                                    "vencimento": data_base.strftime("%Y-%m-%d"),  # Vencimento da primeira parcela
                                     "id_processo": id_processo_sel,
                                     "centro_custo": "Repasse",
                                     "recorrente": 0
                                 }
                                 db.crud_insert("financeiro", dados_repasse, f"Repasse automático para {p_nome}")
-                                st.toast(f"💸 Repasse de R$ {valor_repasse} gerado para {p_nome}!", icon="🤝")
+                                st.toast(f"💸 Repasse de R$ {valor_repasse} ({p_pct}% de R$ {valor}) gerado para {p_nome}!", icon="🤝")
                     # -------------------------------------
                 
                 st.success(f"{parcelas} lançamento(s) realizado(s) com sucesso!")
@@ -284,67 +342,189 @@ def render_extrato_lista():
     df = db.sql_get("financeiro", "vencimento DESC")
     
     if df.empty:
-        st.info("📭 Nenhum lançamento encontrado para os filtros selecionados.")
+        st.info("📭 Nenhum lançamento encontrado.")
         return
+    
+    # Converter datas para filtros
+    df['vencimento_dt'] = pd.to_datetime(df['vencimento'], errors='coerce')
+    
+    # ===== FILTROS AVANÇADOS =====
+    with st.expander("🔍 Filtros Avançados", expanded=False):
+        # Linha 1: Busca e Período
+        col_busca, col_data_ini, col_data_fim = st.columns([2, 1, 1])
+        with col_busca:
+            busca_texto = st.text_input("🔎 Buscar por descrição", placeholder="Digite para buscar...", key="fin_busca")
+        with col_data_ini:
+            data_ini = st.date_input("Data início", value=None, key="fin_data_ini")
+        with col_data_fim:
+            data_fim = st.date_input("Data fim", value=None, key="fin_data_fim")
         
-    # Filtros
-    c1, c2, c3 = st.columns(3)
-    f_tipo = c1.multiselect("Tipo", df['tipo'].unique())
-    f_cat = c2.multiselect("Categoria", df['categoria'].unique())
-    f_status = c3.multiselect("Status", df['status_pagamento'].unique())
+        # Linha 2: Tipo, Categoria, Status
+        c1, c2, c3 = st.columns(3)
+        f_tipo = c1.multiselect("Tipo", df['tipo'].unique(), key="fin_tipo")
+        f_cat = c2.multiselect("Categoria", df['categoria'].dropna().unique(), key="fin_cat")
+        f_status = c3.multiselect("Status", df['status_pagamento'].unique(), key="fin_status")
     
-    if f_tipo: df = df[df['tipo'].isin(f_tipo)]
-    if f_cat: df = df[df['categoria'].isin(f_cat)]
-    if f_status: df = df[df['status_pagamento'].isin(f_status)]
+    # ===== APLICAR FILTROS =====
+    df_filtrado = df.copy()
     
-    # Exibição Customizada
-    for index, row in df.iterrows():
-        cor = "green" if row['tipo'] == "Entrada" else "red"
+    if busca_texto:
+        df_filtrado = df_filtrado[df_filtrado['descricao'].str.contains(busca_texto, case=False, na=False)]
+    if data_ini:
+        df_filtrado = df_filtrado[df_filtrado['vencimento_dt'] >= pd.Timestamp(data_ini)]
+    if data_fim:
+        df_filtrado = df_filtrado[df_filtrado['vencimento_dt'] <= pd.Timestamp(data_fim)]
+    if f_tipo:
+        df_filtrado = df_filtrado[df_filtrado['tipo'].isin(f_tipo)]
+    if f_cat:
+        df_filtrado = df_filtrado[df_filtrado['categoria'].isin(f_cat)]
+    if f_status:
+        df_filtrado = df_filtrado[df_filtrado['status_pagamento'].isin(f_status)]
+    
+    # ===== RESUMO DOS FILTROS =====
+    total_entradas = df_filtrado[df_filtrado['tipo'] == 'Entrada']['valor'].sum()
+    total_saidas = df_filtrado[df_filtrado['tipo'] == 'Saída']['valor'].sum()
+    saldo = total_entradas - total_saidas
+    
+    col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+    col_res1.metric("Registros", len(df_filtrado))
+    col_res2.metric("🟢 Entradas", ut.formatar_moeda(total_entradas))
+    col_res3.metric("🔴 Saídas", ut.formatar_moeda(total_saidas))
+    col_res4.metric("Saldo", ut.formatar_moeda(saldo))
+    
+    st.divider()
+    
+    # ===== PAGINAÇÃO =====
+    ITENS_POR_PAGINA = 15
+    total_paginas = max(1, (len(df_filtrado) + ITENS_POR_PAGINA - 1) // ITENS_POR_PAGINA)
+    
+    col_pg1, col_pg2, col_pg3 = st.columns([1, 2, 1])
+    with col_pg2:
+        pagina_atual = st.number_input(f"Página (de {total_paginas})", min_value=1, max_value=total_paginas, value=1, key="fin_pagina")
+    
+    inicio = (pagina_atual - 1) * ITENS_POR_PAGINA
+    fim = inicio + ITENS_POR_PAGINA
+    df_pagina = df_filtrado.iloc[inicio:fim]
+    
+    # ===== EXIBIÇÃO =====
+    for index, row in df_pagina.iterrows():
         icon = "💰" if row['tipo'] == "Entrada" else "💸"
+        status_icon = "✅" if row['status_pagamento'] == "Pago" else "⏳"
         
-        with st.expander(f"{icon} {row['vencimento']} | {row['descricao']} | {ut.formatar_moeda(row['valor'])}"):
-            c_det1, c_det2 = st.columns(2)
+        # Formatar data para exibição
+        try:
+            data_fmt = pd.to_datetime(row['vencimento']).strftime('%d/%m/%Y')
+        except:
+            data_fmt = str(row['vencimento'])[:10]
+        
+        with st.expander(f"{icon} {status_icon} {data_fmt} | {row['descricao'][:40]}... | {ut.formatar_moeda(row['valor'])}"):
+            # ===== MODO EDIÇÃO =====
+            edit_key = f"edit_mode_{row['id']}"
             
-            # Coluna 1: Detalhes
-            with c_det1:
-                st.write(f"**Categoria:** {row['categoria']}")
-                st.write(f"**Centro de Custo:** {row['centro_custo']}")
-                st.write(f"**Responsável:** {row['responsavel']}")
+            if st.session_state.get(edit_key, False):
+                # Formulário de edição
+                with st.form(f"form_edit_{row['id']}"):
+                    st.markdown("**✏️ Editando Lançamento**")
+                    
+                    col_e1, col_e2 = st.columns(2)
+                    new_desc = col_e1.text_input("Descrição", value=row['descricao'])
+                    new_valor = col_e2.number_input("Valor", value=float(row['valor']), min_value=0.01)
+                    
+                    col_e3, col_e4 = st.columns(2)
+                    new_venc = col_e3.date_input("Vencimento", value=pd.to_datetime(row['vencimento']).date())
+                    new_status = col_e4.selectbox("Status", ["Pendente", "Pago"], index=0 if row['status_pagamento'] == "Pendente" else 1)
+                    
+                    col_btn1, col_btn2 = st.columns(2)
+                    if col_btn1.form_submit_button("💾 Salvar", type="primary"):
+                        db.crud_update("financeiro", {
+                            "descricao": new_desc,
+                            "valor": new_valor,
+                            "vencimento": new_venc.strftime("%Y-%m-%d"),
+                            "status_pagamento": new_status,
+                            "data_pagamento": datetime.now().strftime("%Y-%m-%d") if new_status == "Pago" else None
+                        }, "id = ?", (row['id'],), "Edição de lançamento")
+                        st.session_state[edit_key] = False
+                        st.rerun()
+                    
+                    if col_btn2.form_submit_button("❌ Cancelar"):
+                        st.session_state[edit_key] = False
+                        st.rerun()
+            else:
+                # Exibição normal
+                c_det1, c_det2 = st.columns(2)
                 
-                # Exibir meio de pagamento se disponível
-                if row.get('meio_pagamento'):
-                    st.write(f"**Pagamento:** {row['meio_pagamento']}")
+                with c_det1:
+                    st.write(f"**Categoria:** {row['categoria']}")
+                    st.write(f"**Centro de Custo:** {row.get('centro_custo', 'N/A')}")
+                    st.write(f"**Responsável:** {row.get('responsavel', 'N/A')}")
+                    if row.get('meio_pagamento'):
+                        st.write(f"**Pagamento:** {row['meio_pagamento']}")
+                    if row.get('comprovante_link'):
+                        st.markdown(f"[📄 Ver Comprovante]({row['comprovante_link']})")
                 
-                if row.get('comprovante_link'):
-                    st.markdown(f"[📄 Ver Comprovante]({row['comprovante_link']})", unsafe_allow_html=True)
-                
-            # Coluna 2: Ações
-            with c_det2:
-                novo_status = st.selectbox("Alterar Status", ["Pendente", "Pago"], index=0 if row['status_pagamento']=="Pendente" else 1, key=f"st_{row['id']}")
-                
-                if novo_status != row['status_pagamento']:
-                    db.crud_update("financeiro", 
-                                  {"status_pagamento": novo_status, 
-                                   "data_pagamento": datetime.now().strftime("%Y-%m-%d") if novo_status == "Pago" else None},
-                                  "id = ?", (row['id'],), "Alteração Status Extrato")
-                    st.rerun()
-                
-                # Botão para Emitir Recibo (Se Pago e Entrada)
-                if row['status_pagamento'] == 'Pago' and row['tipo'] == 'Entrada':
-                    if st.button("📄 Emitir Recibo", key=f"rec_{row['id']}"):
-                        st.session_state['recibo_pre_fill'] = {
-                            'id_lancamento': row['id'],
-                            'valor': row['valor'],
-                            'descricao': row['descricao'],
-                            'id_cliente': row['id_cliente'],
-                            'data_pagamento': row['data_pagamento']
-                        }
-                        # Forçar mudança de aba (gambiarra visual ou instrução)
-                        st.info("Vá para a aba 'Emitir Recibo' para gerar o PDF.")
-                
-                if st.button("🗑️ Excluir", key=f"del_{row['id']}"):
-                    db.crud_delete("financeiro", "id = ?", (row['id'],), "Exclusão Extrato")
-                    st.rerun()
+                with c_det2:
+                    # Ações rápidas
+                    col_act1, col_act2, col_act3 = st.columns(3)
+                    
+                    # Botão Editar
+                    if col_act1.button("✏️ Editar", key=f"btn_edit_{row['id']}"):
+                        st.session_state[edit_key] = True
+                        st.rerun()
+                    
+                    # Alterar Status rápido
+                    if row['status_pagamento'] == "Pendente":
+                        if col_act2.button("✅ Pagar", key=f"pagar_{row['id']}"):
+                            db.crud_update("financeiro", {
+                                "status_pagamento": "Pago",
+                                "data_pagamento": datetime.now().strftime("%Y-%m-%d")
+                            }, "id = ?", (row['id'],), "Baixa rápida")
+                            st.rerun()
+                    else:
+                        if col_act2.button("↩️ Estornar", key=f"estornar_{row['id']}"):
+                            db.crud_update("financeiro", {
+                                "status_pagamento": "Pendente",
+                                "data_pagamento": None
+                            }, "id = ?", (row['id'],), "Estorno de pagamento")
+                            st.rerun()
+                    
+                    # Excluir
+                    if col_act3.button("🗑️", key=f"del_{row['id']}", help="Excluir"):
+                        db.crud_delete("financeiro", "id = ?", (row['id'],), "Exclusão")
+                        st.rerun()
+                    
+                    st.divider()
+                    
+                    # Ações adicionais
+                    if row['status_pagamento'] == 'Pago' and row['tipo'] == 'Entrada':
+                        if st.button("📄 Emitir Recibo", key=f"rec_{row['id']}", use_container_width=True):
+                            st.session_state['recibo_pre_fill'] = {
+                                'id_lancamento': row['id'],
+                                'valor': row['valor'],
+                                'descricao': row['descricao'],
+                                'id_cliente': row.get('id_cliente'),
+                                'data_pagamento': row.get('data_pagamento')
+                            }
+                            st.info("Vá para a aba 'Emitir Recibo'.")
+                    
+                    if row['status_pagamento'] == 'Pendente' and row['tipo'] == 'Entrada' and row.get('id_cliente'):
+                        cliente_data = db.sql_get_query("SELECT nome, email FROM clientes WHERE id = ?", (row['id_cliente'],))
+                        if not cliente_data.empty and cliente_data.iloc[0].get('email'):
+                            if st.button("📧 Cobrança", key=f"cob_{row['id']}", use_container_width=True):
+                                cli = cliente_data.iloc[0]
+                                try:
+                                    data_venc = datetime.strptime(str(row['vencimento'])[:10], '%Y-%m-%d').date()
+                                    dias_atraso = max(0, (datetime.now().date() - data_venc).days)
+                                except Exception as e:
+                                    logger.warning(f"Erro ao calcular dias atraso: {e}")
+                                    dias_atraso = 0
+                                
+                                venc_fmt = datetime.strptime(str(row['vencimento'])[:10], '%Y-%m-%d').strftime('%d/%m/%Y')
+                                corpo = email_templates.template_lembrete_pagamento(cli['nome'], row['descricao'], float(row['valor']), venc_fmt, dias_atraso)
+                                sucesso, erro = utils_email.enviar_email(cli['email'], "Lembrete de Pagamento - Lopes & Ribeiro", corpo)
+                                if sucesso:
+                                    st.success(f"✅ Lembrete enviado!")
+                                else:
+                                    st.error(f"❌ Falha: {erro}")
 
 def render_relatorios_tab():
     st.markdown("### 📊 Análise Financeira Detalhada")
@@ -358,7 +538,7 @@ def render_relatorios_tab():
     df['vencimento'] = pd.to_datetime(df['vencimento'], errors='coerce')
     
     # Sub-abas de Relatórios
-    tab_visao, tab_inadim, tab_export = st.tabs(["📈 Visão Geral", "⚠️ Inadimplência", "📥 Exportar"])
+    tab_visao, tab_dre, tab_graficos, tab_inadim, tab_export = st.tabs(["📈 Visão Geral", "📊 DRE", "🥧 Gráficos", "⚠️ Inadimplência", "📥 Exportar"])
     
     with tab_visao:
         # Filtro de Período
@@ -384,6 +564,138 @@ def render_relatorios_tab():
             st.bar_chart(rec_sum, color="#00cc96")
         else:
             st.info("Sem receitas neste ano.")
+    
+    with tab_dre:
+        st.markdown("#### 📊 Demonstrativo de Resultado (DRE Simplificado)")
+        
+        # Seleção de período
+        col_dre1, col_dre2 = st.columns(2)
+        mes_dre = col_dre1.selectbox("Mês", list(range(1, 13)), index=datetime.now().month - 1, format_func=lambda x: ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'][x-1])
+        ano_dre = col_dre2.selectbox("Ano", sorted(df['vencimento'].dt.year.dropna().unique(), reverse=True), key="dre_ano")
+        
+        df_dre = df[
+            (df['vencimento'].dt.month == mes_dre) & 
+            (df['vencimento'].dt.year == ano_dre) &
+            (df['status_pagamento'] == 'Pago')
+        ]
+        
+        # Calcular valores
+        receita_bruta = df_dre[df_dre['tipo'] == 'Entrada']['valor'].sum()
+        
+        # Despesas por categoria
+        df_desp = df_dre[df_dre['tipo'] == 'Saída']
+        desp_pessoal = df_desp[df_desp['categoria'].isin(['Pessoal', 'Salários'])]['valor'].sum()
+        desp_admin = df_desp[df_desp['categoria'].isin(['Aluguel', 'Energia/Água', 'Internet', 'Impostos'])]['valor'].sum()
+        desp_operacional = df_desp[df_desp['categoria'].isin(['Software', 'Marketing', 'Outros'])]['valor'].sum()
+        desp_repasse = df_desp[df_desp['categoria'] == 'Repasse de Parceria']['valor'].sum()
+        
+        total_despesas = df_desp['valor'].sum()
+        lucro_liquido = receita_bruta - total_despesas
+        margem = (lucro_liquido / receita_bruta * 100) if receita_bruta > 0 else 0
+        
+        # Exibir DRE
+        st.markdown("---")
+        dre_data = {
+            "Descrição": [
+                "📈 RECEITA BRUTA",
+                "  ├─ Honorários",
+                "  ├─ Sucumbência",
+                "  └─ Outros",
+                "📉 (-) DESPESAS",
+                "  ├─ Pessoal",
+                "  ├─ Administrativo",
+                "  ├─ Operacional",
+                "  └─ Repasses",
+                "━━━━━━━━━━━━━━━━━━",
+                "💰 LUCRO LÍQUIDO",
+                "📊 MARGEM (%)"
+            ],
+            "Valor": [
+                ut.formatar_moeda(receita_bruta),
+                ut.formatar_moeda(df_dre[(df_dre['tipo'] == 'Entrada') & (df_dre['categoria'] == 'Honorários')]['valor'].sum()),
+                ut.formatar_moeda(df_dre[(df_dre['tipo'] == 'Entrada') & (df_dre['categoria'] == 'Sucumbência')]['valor'].sum()),
+                ut.formatar_moeda(df_dre[(df_dre['tipo'] == 'Entrada') & (~df_dre['categoria'].isin(['Honorários', 'Sucumbência']))]['valor'].sum()),
+                ut.formatar_moeda(total_despesas),
+                ut.formatar_moeda(desp_pessoal),
+                ut.formatar_moeda(desp_admin),
+                ut.formatar_moeda(desp_operacional),
+                ut.formatar_moeda(desp_repasse),
+                "",
+                ut.formatar_moeda(lucro_liquido),
+                f"{margem:.1f}%"
+            ]
+        }
+        
+        st.dataframe(pd.DataFrame(dre_data), use_container_width=True, hide_index=True)
+        
+        # Indicadores visuais
+        col_ind1, col_ind2, col_ind3 = st.columns(3)
+        col_ind1.metric("Receita", ut.formatar_moeda(receita_bruta))
+        col_ind2.metric("Despesas", ut.formatar_moeda(total_despesas))
+        col_ind3.metric("Lucro", ut.formatar_moeda(lucro_liquido), delta=f"{margem:.1f}%")
+    
+    with tab_graficos:
+        st.markdown("#### 🥧 Gráficos de Distribuição")
+        
+        col_graf1, col_graf2 = st.columns(2)
+        
+        with col_graf1:
+            st.markdown("##### Despesas por Categoria")
+            df_desp_ano = df_ano[df_ano['tipo'] == 'Saída']
+            if not df_desp_ano.empty:
+                desp_cat = df_desp_ano.groupby('categoria')['valor'].sum()
+                
+                # Criar dados para gráfico de pizza (usando plotly)
+                import plotly.express as px
+                fig1 = px.pie(
+                    values=desp_cat.values, 
+                    names=desp_cat.index,
+                    title="Distribuição de Despesas",
+                    color_discrete_sequence=px.colors.sequential.Reds
+                )
+                fig1.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig1, use_container_width=True)
+            else:
+                st.info("Sem despesas no período.")
+        
+        with col_graf2:
+            st.markdown("##### Receitas por Origem")
+            df_rec_ano = df_ano[df_ano['tipo'] == 'Entrada']
+            if not df_rec_ano.empty:
+                rec_cat = df_rec_ano.groupby('categoria')['valor'].sum()
+                
+                fig2 = px.pie(
+                    values=rec_cat.values, 
+                    names=rec_cat.index,
+                    title="Distribuição de Receitas",
+                    color_discrete_sequence=px.colors.sequential.Greens
+                )
+                fig2.update_traces(textposition='inside', textinfo='percent+label')
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("Sem receitas no período.")
+        
+        # Gráfico de evolução mensal
+        st.markdown("##### 📈 Evolução Mensal")
+        df_evol = df[df['status_pagamento'] == 'Pago'].copy()
+        if not df_evol.empty:
+            df_evol['mes'] = df_evol['vencimento'].dt.strftime('%Y-%m')
+            evol_data = df_evol.groupby(['mes', 'tipo'])['valor'].sum().unstack().fillna(0)
+            
+            if 'Entrada' not in evol_data.columns: evol_data['Entrada'] = 0
+            if 'Saída' not in evol_data.columns: evol_data['Saída'] = 0
+            
+            evol_data['Lucro'] = evol_data['Entrada'] - evol_data['Saída']
+            
+            fig3 = px.line(
+                evol_data.reset_index(),
+                x='mes',
+                y=['Entrada', 'Saída', 'Lucro'],
+                title="Evolução Financeira",
+                labels={'value': 'Valor (R$)', 'mes': 'Mês'},
+                color_discrete_map={'Entrada': '#00cc96', 'Saída': '#ff4b4b', 'Lucro': '#636efa'}
+            )
+            st.plotly_chart(fig3, use_container_width=True)
     
     with tab_inadim:
         st.markdown("#### ⚠️ Relatório de Inadimplência")
@@ -483,6 +795,87 @@ def render_relatorios_tab():
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             st.success("Arquivo gerado com sucesso!")
+        
+        st.divider()
+        
+        # Relatório PDF
+        st.markdown("#### 📄 Relatório em PDF")
+        st.caption("Gere um relatório resumido em PDF para enviar aos sócios")
+        
+        col_pdf1, col_pdf2 = st.columns(2)
+        mes_pdf = col_pdf1.selectbox("Mês do Relatório", list(range(1, 13)), 
+                                      index=datetime.now().month - 1,
+                                      format_func=lambda x: ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
+                                                             'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'][x-1],
+                                      key="pdf_mes")
+        ano_pdf = col_pdf2.selectbox("Ano", sorted(df['vencimento'].dt.year.dropna().unique(), reverse=True), key="pdf_ano")
+        
+        if st.button("📄 Gerar Relatório PDF", type="primary"):
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib import colors
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            
+            pdf_buffer = io.BytesIO()
+            doc = SimpleDocTemplate(pdf_buffer, pagesize=A4)
+            elements = []
+            styles = getSampleStyleSheet()
+            
+            # Título
+            title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, alignment=1)
+            elements.append(Paragraph("RELATÓRIO FINANCEIRO", title_style))
+            elements.append(Paragraph(f"Mês: {mes_pdf}/{ano_pdf}", styles['Normal']))
+            elements.append(Spacer(1, 20))
+            
+            # Filtrar dados do mês
+            df_pdf = df[
+                (df['vencimento'].dt.month == mes_pdf) & 
+                (df['vencimento'].dt.year == ano_pdf) &
+                (df['status_pagamento'] == 'Pago')
+            ]
+            
+            receitas = df_pdf[df_pdf['tipo'] == 'Entrada']['valor'].sum()
+            despesas = df_pdf[df_pdf['tipo'] == 'Saída']['valor'].sum()
+            lucro = receitas - despesas
+            margem = (lucro / receitas * 100) if receitas > 0 else 0
+            
+            # Tabela resumo
+            data = [
+                ["Descrição", "Valor"],
+                ["Receita Total", f"R$ {receitas:,.2f}"],
+                ["Despesas Total", f"R$ {despesas:,.2f}"],
+                ["Lucro Líquido", f"R$ {lucro:,.2f}"],
+                ["Margem", f"{margem:.1f}%"]
+            ]
+            
+            table = Table(data, colWidths=[200, 150])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f77b4')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f0f0f0')),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            elements.append(table)
+            elements.append(Spacer(1, 20))
+            
+            # Rodapé
+            elements.append(Paragraph(f"Gerado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles['Normal']))
+            elements.append(Paragraph("Lopes & Ribeiro Advocacia", styles['Normal']))
+            
+            doc.build(elements)
+            pdf_buffer.seek(0)
+            
+            st.download_button(
+                label="⬇️ Baixar Relatório PDF",
+                data=pdf_buffer,
+                file_name=f"Relatorio_Financeiro_{mes_pdf}_{ano_pdf}.pdf",
+                mime="application/pdf"
+            )
+            st.success("Relatório PDF gerado!")
 
 
 def render_recibos_tab():
@@ -509,7 +902,37 @@ def render_recibos_tab():
             
             c1, c2 = st.columns(2)
             nome_final = c1.text_input("Nome do Pagador", value=cli_row['nome'])
-            cpf_final = c2.text_input("CPF/CNPJ", value=cli_row['cpf_cnpj'] if cli_row['cpf_cnpj'] else "")
+            
+            # Descriptografar CPF se estiver criptografado
+            cpf_raw = cli_row['cpf_cnpj'] if cli_row['cpf_cnpj'] else ""
+            cpf_display = ""
+            cpf_precisa_manual = False
+            
+            if cpf_raw:
+                cpf_str = str(cpf_raw)
+                # Verificar se está criptografado (ENC: ou apenas começa com ENC)
+                if cpf_str.startswith("ENC:"):
+                    # Formato padrão - tentar descriptografar
+                    try:
+                        cpf_decrypted = crypto.decrypt(cpf_raw)
+                        if cpf_decrypted and not str(cpf_decrypted).startswith("ENC"):
+                            cpf_display = cpf_decrypted
+                        else:
+                            cpf_precisa_manual = True
+                    except Exception as e:
+                        logger.warning(f"Erro ao descriptografar CPF: {e}")
+                        cpf_precisa_manual = True
+                elif cpf_str.startswith("ENC") or cpf_str.startswith("gAAAA"):
+                    # Formato antigo ou base64 direto - não conseguimos descriptografar
+                    cpf_precisa_manual = True
+                else:
+                    # Não está criptografado - usar diretamente
+                    cpf_display = cpf_raw
+            
+            if cpf_precisa_manual:
+                st.caption("⚠️ CPF criptografado - insira manualmente se necessário")
+            
+            cpf_final = c2.text_input("CPF/CNPJ", value=cpf_display, placeholder="Digite o CPF/CNPJ")
             
             c3, c4 = st.columns(2)
             valor = c3.number_input("Valor (R$)", min_value=0.01, step=100.0)
@@ -561,14 +984,22 @@ def render_recibos_tab():
                 cli = db.sql_get_query("SELECT * FROM clientes WHERE id = ?", (int(row['id_cliente']),))
                 if not cli.empty:
                     nome_cli = cli.iloc[0]['nome']
-                    cpf_cli = cli.iloc[0]['cpf_cnpj'] if cli.iloc[0]['cpf_cnpj'] else ""
+                    # Descriptografar CPF com fallback
+                    cpf_raw = cli.iloc[0]['cpf_cnpj'] if cli.iloc[0]['cpf_cnpj'] else ""
+                    if cpf_raw:
+                        try:
+                            cpf_decrypted = crypto.decrypt(cpf_raw)
+                            if cpf_decrypted and not str(cpf_decrypted).startswith("ENC"):
+                                cpf_cli = cpf_decrypted
+                        except:
+                            pass
             
             st.info(f"Dados carregados: {nome_cli} - R$ {row['valor']}")
             
             # Permitir edição
             c1, c2 = st.columns(2)
             nome_final = c1.text_input("Nome do Pagador", value=nome_cli)
-            cpf_final = c2.text_input("CPF/CNPJ", value=cpf_cli)
+            cpf_final = c2.text_input("CPF/CNPJ", value=cpf_cli, placeholder="Digite o CPF/CNPJ")
             
             dados_recibo = {
                 'nome_cliente': nome_final,
@@ -713,3 +1144,117 @@ def verificar_recorrencias():
     except Exception as e:
         print(f"Erro ao verificar recorrências: {e}")
 
+
+def render_importar_tab():
+    """Aba para importar lançamentos via Excel"""
+    st.markdown("### 📥 Importar Lançamentos")
+    st.caption("Importe vários lançamentos de uma vez através de um arquivo Excel")
+    
+    # Template para download
+    with st.expander("📄 Baixar Template Excel", expanded=False):
+        st.info("""
+        **Formato esperado do arquivo:**
+        - **data** (DD/MM/YYYY): Data do lançamento
+        - **tipo** (Entrada/Saída): Tipo do lançamento
+        - **descricao**: Descrição do lançamento
+        - **valor**: Valor em reais (ex: 1500.50)
+        - **vencimento** (DD/MM/YYYY): Data de vencimento
+        - **categoria**: Categoria do lançamento
+        - **status** (Pendente/Pago): Status do pagamento
+        """)
+        
+        # Gerar template
+        template_data = {
+            'data': ['01/12/2024', '05/12/2024'],
+            'tipo': ['Entrada', 'Saída'],
+            'descricao': ['Honorários João Silva', 'Aluguel Escritório'],
+            'valor': [2500.00, 1500.00],
+            'vencimento': ['10/12/2024', '10/12/2024'],
+            'categoria': ['Honorários', 'Aluguel'],
+            'status': ['Pendente', 'Pago']
+        }
+        df_template = pd.DataFrame(template_data)
+        
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            df_template.to_excel(writer, sheet_name='Lançamentos', index=False)
+        buffer.seek(0)
+        
+        st.download_button(
+            "⬇️ Baixar Template",
+            data=buffer,
+            file_name="template_lancamentos.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    
+    st.divider()
+    
+    # Upload do arquivo
+    uploaded_file = st.file_uploader("Selecione o arquivo Excel", type=['xlsx', 'xls'], key="import_excel")
+    
+    if uploaded_file:
+        try:
+            df_import = pd.read_excel(uploaded_file)
+            
+            st.markdown("**Preview dos dados:**")
+            st.dataframe(df_import.head(10), use_container_width=True)
+            
+            st.markdown(f"**Total de linhas:** {len(df_import)}")
+            
+            # Validação básica
+            colunas_necessarias = ['tipo', 'descricao', 'valor', 'vencimento']
+            colunas_faltando = [c for c in colunas_necessarias if c not in df_import.columns]
+            
+            if colunas_faltando:
+                st.error(f"❌ Colunas obrigatórias faltando: {', '.join(colunas_faltando)}")
+                return
+            
+            if st.button("📤 Importar Lançamentos", type="primary"):
+                with st.spinner("Importando..."):
+                    importados = 0
+                    erros = 0
+                    
+                    for idx, row in df_import.iterrows():
+                        try:
+                            # Parsear datas
+                            data_lanc = datetime.now().strftime("%Y-%m-%d")
+                            if 'data' in row and pd.notna(row['data']):
+                                try:
+                                    data_lanc = pd.to_datetime(row['data'], dayfirst=True).strftime("%Y-%m-%d")
+                                except:
+                                    pass
+                            
+                            vencimento = datetime.now().strftime("%Y-%m-%d")
+                            if pd.notna(row['vencimento']):
+                                try:
+                                    vencimento = pd.to_datetime(row['vencimento'], dayfirst=True).strftime("%Y-%m-%d")
+                                except:
+                                    pass
+                            
+                            dados = {
+                                "data": data_lanc,
+                                "tipo": row['tipo'],
+                                "descricao": str(row['descricao']),
+                                "valor": float(row['valor']),
+                                "vencimento": vencimento,
+                                "categoria": row.get('categoria', 'Outros') if pd.notna(row.get('categoria')) else 'Outros',
+                                "status_pagamento": row.get('status', 'Pendente') if pd.notna(row.get('status')) else 'Pendente',
+                                "responsavel": "Importação",
+                                "centro_custo": "Importado",
+                                "recorrente": 0
+                            }
+                            
+                            db.crud_insert("financeiro", dados, "Importação Excel")
+                            importados += 1
+                            
+                        except Exception as e:
+                            logger.error(f"Erro na linha {idx}: {e}")
+                            erros += 1
+                    
+                    st.success(f"✅ {importados} lançamentos importados com sucesso!")
+                    if erros > 0:
+                        st.warning(f"⚠️ {erros} linhas com erro foram ignoradas.")
+                    st.rerun()
+                    
+        except Exception as e:
+            st.error(f"❌ Erro ao ler arquivo: {e}")

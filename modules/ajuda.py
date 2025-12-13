@@ -111,7 +111,7 @@ def render_module_guides():
     
     module = st.selectbox(
         "Selecione o módulo:",
-        ["Dashboard", "Clientes (CRM)", "Processos", "Financeiro", "Propostas", "Relatórios", "IA Jurídica", "Administração"]
+        ["Dashboard", "Clientes (CRM)", "Processos", "Financeiro", "Propostas", "Relatórios", "IA Jurídica", "Google Workspace", "Administração"]
     )
     
     if module == "Dashboard":
@@ -128,6 +128,8 @@ def render_module_guides():
         render_guide_relatorios()
     elif module == "IA Jurídica":
         render_guide_ia()
+    elif module == "Google Workspace":
+        render_guide_google()
     elif module == "Administração":
         render_guide_admin()
 
@@ -411,6 +413,111 @@ def render_guide_ia():
         - **[FINANCEIRO] Analisar Financeiro**: A IA lê seu fluxo de caixa e sugere melhorias.
         - **[PROCESSOS] Processos Parados**: Identifica gargalos e sugere despachos.
         - **[PROPOSTAS] Analisar Propostas**: Dicas para fechar contratos em aberto.
+        """)
+
+def render_guide_google():
+    st.markdown("### [GOOGLE] Google Workspace")
+    
+    st.markdown("""
+    Integração com **Google Drive**, **Gmail** e **Calendar** para automação completa.
+    """)
+    
+    with st.expander("🔧 Configuração Inicial (OAuth)"):
+        st.markdown("""
+        **Requisitos:**
+        1. Conta Google
+        2. Acesso ao [Google Cloud Console](https://console.cloud.google.com/)
+        
+        **Passo a Passo:**
+        
+        1. **Criar Projeto no Google Cloud**
+           - Acesse Console > Criar Projeto
+           - Nome: "Sistema Lopes Ribeiro"
+        
+        2. **Ativar APIs**
+           - Biblioteca > Buscar: Gmail API, Drive API, Calendar API
+           - Clicar em "Ativar" para cada uma
+        
+        3. **Criar Credenciais OAuth**
+           - Credenciais > Criar Credenciais > ID do cliente OAuth
+           - Tipo: Aplicativo de Desktop
+           - Baixar JSON como `credentials.json`
+           - Colocar na pasta do projeto
+        
+        4. **Primeira Execução**
+           - O sistema vai abrir navegador para autorização
+           - Fazer login e permitir acesso
+           - Token será salvo automaticamente
+        """)
+    
+    with st.expander("📁 Google Drive"):
+        st.markdown("""
+        **Funcionalidades:**
+        - Upload de documentos por cliente/processo
+        - Navegação de arquivos
+        - Organização automática de pastas
+        
+        **Estrutura de Pastas:**
+        ```
+        📁 Clientes/
+        ├── 📁 João Silva/
+        │   ├── 📁 0001234-56.2024.8.19.0001/
+        │   │   └── 📄 Petição Inicial.pdf
+        │   └── 📄 Documentos Pessoais.pdf
+        └── 📁 Maria Santos/
+        ```
+        
+        **Acesso:** Menu → "📁 Google Drive"
+        """)
+    
+    with st.expander("📧 Gmail (Alertas de Intimação)"):
+        st.markdown("""
+        **Como Funciona:**
+        - Sistema verifica e-mails de tribunais automaticamente
+        - Detecta intimações, citações, alvarás e RPVs
+        - Cria alertas para ação imediata
+        
+        **Remetentes Monitorados:**
+        - push@tjrj.jus.br
+        - pje@trt1.jus.br
+        - intimacao@tjrj.jus.br
+        - noreply@pje.jus.br
+        
+        **Agendamento (Windows):**
+        1. Abrir `taskschd.msc`
+        2. Criar Tarefa: `LopesRibeiro_EmailCheck`
+        3. Disparador: A cada 30 minutos
+        4. Programa: `python email_scheduler.py`
+        
+        **Acesso:** Menu → "📧 Alertas E-mail"
+        """)
+    
+    with st.expander("📅 Google Calendar"):
+        st.markdown("""
+        **Sincronização:**
+        - Eventos da agenda são criados no Google Calendar
+        - Lembretes automáticos (1 dia e 1 hora antes)
+        - Vinculação com processos
+        
+        **Configuração:**
+        - Menu → "📅 Agenda" → "Configurações Google"
+        - Autorizar acesso ao Calendar
+        """)
+    
+    with st.expander("🔑 Arquivos de Credenciais"):
+        st.markdown("""
+        **Arquivos Necessários:**
+        
+        | Arquivo | Descrição |
+        |---------|-----------|
+        | `credentials.json` | Credenciais OAuth (download do Google) |
+        | `token.json` | Token de acesso (gerado automaticamente) |
+        | `service_account.json` | Conta de serviço (opcional, para automação) |
+        
+        **⚠️ Segurança:**
+        - Nunca compartilhe estes arquivos
+        - Adicione ao `.gitignore`
+        - Guarde backup seguro
         """)
 
 def render_guide_admin():

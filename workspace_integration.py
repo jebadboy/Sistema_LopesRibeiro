@@ -98,6 +98,7 @@ class TokenManager:
     """Gerencia refresh de tokens OAuth."""
     
     MAX_REFRESH_ATTEMPTS = 3
+    CREDENTIALS_FILE = 'credentials.json'  # Arquivo OAuth client secrets
     
     @staticmethod
     def get_token_file(username: str) -> str:
@@ -105,13 +106,14 @@ class TokenManager:
         return os.path.join(TOKEN_DIR, f"token_{username}.pickle")
     
     @staticmethod
-    def get_credentials(username: str = "sistema") -> Optional[Credentials]:
+    def get_credentials(username: str = "sistema", force_interactive: bool = False) -> Optional[Credentials]:
         """
         Obtém credenciais de forma segura.
         Prioridade:
         1. Streamlit Secrets (Produção)
         2. Token OAuth existente
-        3. Service Account File
+        3. Fluxo OAuth Interativo (abre navegador)
+        4. Service Account File (Fallback)
         """
         # 1. Tentar Streamlit Secrets
         if STREAMLIT_AVAILABLE and "gcp_service_account" in st.secrets:
@@ -123,9 +125,9 @@ class TokenManager:
             except Exception as e:
                 logger.error(f"Erro ao usar Streamlit Secrets: {e}")
         
-        # 2. Tentar Token OAuth
+        # 2. Tentar Token OAuth existente
         token_file = TokenManager.get_token_file(username)
-        if os.path.exists(token_file):
+        if os.path.exists(token_file) and not force_interactive:
             try:
                 with open(token_file, 'rb') as f:
                     creds = pickle.load(f)
@@ -137,7 +139,16 @@ class TokenManager:
             except Exception as e:
                 logger.error(f"Erro ao carregar token: {e}")
         
-        # 3. Fallback para Service Account
+        # 3. Fluxo OAuth Interativo (abre navegador)
+        if os.path.exists(TokenManager.CREDENTIALS_FILE):
+            try:
+                creds = TokenManager.run_oauth_flow(username)
+                if creds:
+                    return creds
+            except Exception as e:
+                logger.error(f"Erro no fluxo OAuth: {e}")
+        
+        # 4. Fallback para Service Account
         if os.path.exists(SERVICE_ACCOUNT_FILE):
             try:
                 return service_account.Credentials.from_service_account_file(
@@ -148,6 +159,44 @@ class TokenManager:
                 logger.error(f"Erro ao usar Service Account: {e}")
         
         return None
+    
+    @staticmethod
+    def run_oauth_flow(username: str = "sistema") -> Optional[Credentials]:
+        """
+        Executa fluxo OAuth interativo abrindo o navegador.
+        Isso pede autorização do usuário para acessar Gmail, Drive e Calendar.
+        """
+        try:
+            from google_auth_oauthlib.flow import InstalledAppFlow
+            
+            logger.info("Iniciando fluxo de autorização OAuth...")
+            print("\n" + "="*60)
+            print("🔐 AUTORIZAÇÃO NECESSÁRIA")
+            print("="*60)
+            print("O navegador será aberto para você autorizar o acesso.")
+            print("Por favor, faça login e permita o acesso ao Gmail, Drive e Calendar.")
+            print("="*60 + "\n")
+            
+            flow = InstalledAppFlow.from_client_secrets_file(
+                TokenManager.CREDENTIALS_FILE,
+                scopes=SCOPES
+            )
+            
+            # Abre navegador para autorização
+            creds = flow.run_local_server(port=0)
+            
+            # Salvar token
+            TokenManager.save_token(creds, username)
+            logger.info(f"✅ Token OAuth criado para {username}")
+            print("\n✅ Autorização concluída com sucesso!\n")
+            
+            return creds
+        except ImportError:
+            logger.error("google-auth-oauthlib não instalado. Execute: pip install google-auth-oauthlib")
+            return None
+        except Exception as e:
+            logger.error(f"Erro no fluxo OAuth: {e}")
+            return None
     
     @staticmethod
     def refresh_credentials(creds: Credentials, username: str) -> bool:
@@ -430,9 +479,19 @@ class GmailWatcher:
     """
     Monitora caixa de e-mail para intimações judiciais.
     Usa polling a cada 30 minutos (via Windows Task Scheduler).
+    
+    ATUALIZADO COM DADOS REAIS - Sprint Final
     """
     
-    REMETENTES_ALTA_PRIORIDADE = [
+    # =========================================================================
+    # WHITELIST - Remetentes Autorizados (PROCESSAR)
+    # =========================================================================
+    WHITELIST_REMETENTES = [
+        "tjrj.pjeadm-ld@tjrj.jus.br",      # Push oficial TJRJ - PJe
+        "rd_oabrj@recortedigital.adv.br",   # Recorte Digital OAB/RJ (CRÍTICO)
+        "no-reply@pje.jus.br",              # PJe Genérico
+        "push-trt1@trt1.jus.br",            # Trabalhista TRT1
+        # Mantidos da versão anterior para compatibilidade
         "push@tjrj.jus.br",
         "pje@trt1.jus.br",
         "intimacao@tjrj.jus.br",
@@ -442,16 +501,51 @@ class GmailWatcher:
         "intimacoes@trf2.jus.br"
     ]
     
-    PALAVRAS_CHAVE_FINANCEIRO = [
-        "alvará", "mandado de pagamento", "depósito judicial",
-        "rpv", "precatório", "pagamento liberado", "liberação de valores",
-        "levantamento", "expedido alvará"
+    # =========================================================================
+    # BLACKLIST - Remetentes Ignorados (NÃO processar)
+    # =========================================================================
+    BLACKLIST_REMETENTES = [
+        "mailing@newsletter.oabrj.org.br",  # Newsletter OAB/RJ
+        "informativo@oab.com.br",           # Informativos OAB
+        "marketing@",                        # Qualquer marketing
+        "newsletter@",                       # Qualquer newsletter
+        "noreply@newsletter",               # Newsletters genéricas
     ]
     
-    PALAVRAS_CHAVE_PROCESSUAL = [
-        "intimação", "citação", "prazo", "audiência",
-        "sentença", "despacho", "decisão"
+    # =========================================================================
+    # ALTA PRIORIDADE - Keywords Financeiras (Dinheiro!)
+    # =========================================================================
+    PALAVRAS_CHAVE_FINANCEIRO = [
+        "alvará",
+        "mandado de pagamento", 
+        "rpv",
+        "guia de depósito",
+        "levantamento",
+        "depósito judicial",
+        "precatório", 
+        "pagamento liberado", 
+        "liberação de valores",
+        "expedido alvará"
     ]
+    
+    # =========================================================================
+    # MÉDIA PRIORIDADE - Keywords Processuais (Prazos!)
+    # =========================================================================
+    PALAVRAS_CHAVE_PROCESSUAL = [
+        "publicação: intimacao",            # Padrão Recorte Digital
+        "proferido despacho",
+        "juntada de petição",
+        "intimação",
+        "citação", 
+        "prazo",
+        "audiência",
+        "sentença", 
+        "despacho", 
+        "decisão"
+    ]
+    
+    # Alias para compatibilidade
+    REMETENTES_ALTA_PRIORIDADE = WHITELIST_REMETENTES
     
     def __init__(self):
         self.service = None
@@ -572,14 +666,20 @@ class GmailWatcher:
     def classificar_email(self, email_data: Dict) -> Optional[EmailAlert]:
         """
         Classifica e-mail e retorna alerta se relevante.
+        Usa whitelist/blacklist para filtrar remetentes.
         """
         remetente = email_data.get('remetente', '').lower()
         assunto = email_data.get('assunto', '').lower()
         corpo = email_data.get('corpo', '').lower()
         texto_completo = f"{assunto} {corpo}"
         
-        # Verificar se é de tribunal
-        is_tribunal = any(r in remetente for r in self.REMETENTES_ALTA_PRIORIDADE)
+        # BLACKLIST - Ignorar remetentes bloqueados
+        for bloqueado in self.BLACKLIST_REMETENTES:
+            if bloqueado in remetente:
+                return None  # Ignorar completamente
+        
+        # WHITELIST - Verificar se é de tribunal autorizado
+        is_tribunal = any(r in remetente for r in self.WHITELIST_REMETENTES)
         
         # Verificar palavras-chave financeiras
         tipo_alerta = None

@@ -6,8 +6,14 @@ import time
 import os
 from datetime import datetime, timedelta
 import database as db
-from modules import dashboard, clientes, processos, agenda, financeiro, ia_juridica, relatorios, ajuda, admin, conciliacao_bancaria, parceiros, propostas, ai_proactive, aniversarios
+from modules import dashboard, clientes, processos, agenda, financeiro, ia_juridica, relatorios, ajuda, admin, conciliacao_bancaria, parceiros, propostas, ai_proactive, aniversarios, automacao_financeiro, alertas_email, notifications, drive
 from components.ui import load_css
+import rate_limiter as rl
+import lgpd_logger
+
+# LGPD: Aplicar mascaramento automático em TODOS os logs do sistema
+# Isso protege CPF, CNPJ, emails, telefones, senhas
+lgpd_logger.patch_all_loggers()
 
 # Page Config
 st.set_page_config(
@@ -21,6 +27,7 @@ load_css()
 db.init_db()
 db.criar_backup()
 ai_proactive.inicializar()
+automacao_financeiro.inicializar()  # Sprint 2: Automação Financeiro ↔ Processos
 
 # === VERIFICAR SE É ACESSO PÚBLICO (SEM LOGIN) ===
 query_params = st.query_params
@@ -33,7 +40,7 @@ if "token" in query_params:
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'user' not in st.session_state: st.session_state.user = None
 if 'role' not in st.session_state: st.session_state.role = None
-if 'login_attempts' not in st.session_state: st.session_state.login_attempts = {}
+# login_attempts removido - agora usa rate_limiter com persistência em banco
 
 def is_bcrypt_hash(hash_string):
     """Detecta se o hash é bcrypt (começa com $2b$)"""
@@ -283,24 +290,31 @@ def login():
                         st.error("❌ Por favor, preencha todos os campos")
                         st.stop()
                     
-                    # 2. Rate Limiting - Verificar tentativas
-                    attempts_data = st.session_state.login_attempts.get(username, {
-                        'count': 0,
-                        'blocked_until': None
-                    })
+                    # 2. RATE LIMITING - Obter IP do cliente
+                    ip_address = rl.get_client_ip()
                     
-                    # Verificar se está bloqueado
-                    if attempts_data['blocked_until']:
-                        if datetime.now() < attempts_data['blocked_until']:
-                            remaining_seconds = (attempts_data['blocked_until'] - datetime.now()).seconds
-                            remaining_minutes = remaining_seconds // 60 + 1
-                            st.error(f"🚫 Muitas tentativas incorretas. Aguarde {remaining_minutes} minuto(s)")
-                            st.stop()
-                        else:
-                            # Bloqueio expirou, resetar
-                            attempts_data = {'count': 0, 'blocked_until': None}
+                    # 3. Verificar rate limit
+                    limiter = rl.get_rate_limiter()
+                    check = limiter.check_login_attempts(ip_address, username)
                     
-                    # 3. Verificar credenciais
+                    if not check['allowed']:
+                        st.error(check['message'])
+                        st.caption(f"Tente novamente após: {check['reset_at'].strftime('%H:%M')}")
+                        
+                        # Log de auditoria
+                        db.audit('login_blocked', {
+                            'username': username,
+                            'ip': ip_address,
+                            'reason': 'rate_limit_exceeded',
+                            'reset_at': check['reset_at'].isoformat()
+                        })
+                        st.stop()
+                    
+                    # Mostrar aviso se poucas tentativas restantes
+                    if check['message']:
+                        st.warning(check['message'])
+                    
+                    # 4. Verificar credenciais
                     user_data = db.get_usuario_by_username(username)
                     
                     if user_data and user_data['ativo'] == 1:
@@ -308,15 +322,12 @@ def login():
                         
                         # Verificar senha (híbrido: SHA-256 ou bcrypt)
                         if verify_password(password, stored_hash):
-                            # ✅ Login bem-sucedido
+                            # ✅ LOGIN BEM-SUCEDIDO
+                            limiter.record_login_attempt(ip_address, username, success=True)
                             
                             # Converter para bcrypt se ainda estiver em SHA-256
                             if not is_bcrypt_hash(stored_hash):
                                 upgrade_to_bcrypt(username, password)
-                            
-                            # Limpar tentativas de login
-                            if username in st.session_state.login_attempts:
-                                del st.session_state.login_attempts[username]
                             
                             # Configurar sessão
                             st.session_state.logged_in = True
@@ -324,34 +335,54 @@ def login():
                             st.session_state.username = user_data['username']
                             st.session_state.role = user_data['role']
                             
+                            # Log de auditoria
+                            db.audit('login_success', {
+                                'username': username,
+                                'ip': ip_address,
+                                'role': user_data['role']
+                            })
+                            
                             st.success("✅ Login realizado com sucesso!")
                             time.sleep(1)
                             st.rerun()
                         else:
-                            # ❌ Senha incorreta
-                            attempts_data['count'] += 1
+                            # ❌ SENHA INCORRETA
+                            limiter.record_login_attempt(ip_address, username, success=False)
                             
-                            if attempts_data['count'] >= 5:
-                                # Bloquear por 15 minutos
-                                attempts_data['blocked_until'] = datetime.now() + timedelta(minutes=15)
-                                st.error("🚫 Muitas tentativas incorretas. Bloqueado por 15 minutos")
+                            # Verificar quantas tentativas restam
+                            check_remaining = limiter.check_login_attempts(ip_address, username)
+                            
+                            if check_remaining['remaining'] > 0:
+                                st.error(f"❌ Usuário ou senha inválidos")
+                                st.caption(check_remaining['message'])
                             else:
-                                remaining = 5 - attempts_data['count']
-                                st.error(f"❌ Usuário ou senha inválidos ({remaining} tentativa(s) restante(s))")
+                                st.error("🚫 Muitas tentativas. Conta bloqueada temporariamente.")
                             
-                            st.session_state.login_attempts[username] = attempts_data
+                            # Log de auditoria
+                            db.audit('login_failed', {
+                                'username': username,
+                                'ip': ip_address,
+                                'remaining': check_remaining['remaining']
+                            })
                     else:
-                        # Usuário não encontrado ou inativo
-                        # Ainda aplicar rate limiting para dificultar enumeração
-                        attempts_data['count'] += 1
-                        if attempts_data['count'] >= 5:
-                            attempts_data['blocked_until'] = datetime.now() + timedelta(minutes=15)
-                            st.error("🚫 Muitas tentativas incorretas. Bloqueado por 15 minutos")
-                        else:
-                            remaining = 5 - attempts_data['count']
-                            st.error(f"❌ Usuário ou senha inválidos ({remaining} tentativa(s) restante(s))")
+                        # USUÁRIO NÃO ENCONTRADO OU INATIVO
+                        # Ainda aplicar rate limiting para dificultar enumeração de usernames
+                        limiter.record_login_attempt(ip_address, username, success=False)
                         
-                        st.session_state.login_attempts[username] = attempts_data
+                        check_remaining = limiter.check_login_attempts(ip_address, username)
+                        
+                        if check_remaining['remaining'] > 0:
+                            st.error(f"❌ Usuário ou senha inválidos")
+                            st.caption(check_remaining['message'])
+                        else:
+                            st.error("🚫 Muitas tentativas. Bloqueado por 15 minutos")
+                        
+                        # Log de auditoria
+                        db.audit('login_failed', {
+                            'username': username,
+                            'ip': ip_address,
+                            'reason': 'user_not_found_or_inactive'
+                        })
             
             # Link de recuperação de senha
             st.markdown("<div style='text-align: center; margin-top: 1rem;'>", unsafe_allow_html=True)
@@ -484,7 +515,22 @@ else:
     # --- MENU LATERAL ---
     with st.sidebar:
         # Logo e Título (Moderno SaaS)
-        st.image("LOGO.jpg", width=150)
+        if os.path.exists("LOGO.jpg"):
+            try:
+                with open("LOGO.jpg", "rb") as img_file:
+                     logo_b64 = base64.b64encode(img_file.read()).decode()
+                st.markdown(
+                    f"""
+                    <div style="text-align: center; margin-bottom: 10px;">
+                        <img src="data:image/jpeg;base64,{logo_b64}" width="80" style="border-radius: 5px;">
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+            except:
+                st.image("LOGO.jpg", width=80)
+        else:
+            st.image("LOGO.jpg", width=80)
         st.markdown(
             """
             <div style="text-align: center; margin-bottom: 2rem;">
@@ -497,7 +543,57 @@ else:
         
         st.markdown(f"<div style='background-color: #f1f5f9; padding: 0.75rem; border-radius: 8px; margin-bottom: 1.5rem; text-align: center;'><span style='font-size: 0.875rem; color: #475569; font-weight: 500;'>Olá, {st.session_state.user}</span></div>", unsafe_allow_html=True)
         
+        # === BUSCA GLOBAL UNIFICADA ===
+        termo_busca = st.text_input(
+            "🔍 Busca Global",
+            placeholder="Cliente, processo, financeiro...",
+            key="busca_global_input",
+            label_visibility="collapsed"
+        )
+        
+        if termo_busca and len(termo_busca) >= 3:
+            resultados = db.busca_global(termo_busca, limite=10)
+            
+            if resultados['total'] > 0:
+                with st.expander(f"📋 {resultados['total']} resultado(s)", expanded=True):
+                    # Clientes
+                    if not resultados['clientes'].empty:
+                        st.caption("👤 **Clientes**")
+                        for _, row in resultados['clientes'].iterrows():
+                            telefone = row.get('telefone', '')[:15] if row.get('telefone') else ''
+                            label = f"{row['nome']}"
+                            if telefone:
+                                label += f" ({telefone})"
+                            if st.button(label, key=f"bg_cli_{row['id']}", use_container_width=True):
+                                st.session_state.cliente_selecionado = row['id']
+                                st.session_state.nav_selection = "Clientes (CRM)"
+                                st.rerun()
+                    
+                    # Processos
+                    if not resultados['processos'].empty:
+                        st.caption("📁 **Processos**")
+                        for _, row in resultados['processos'].iterrows():
+                            acao = row['acao'][:25] + "..." if len(str(row['acao'])) > 25 else row['acao']
+                            label = f"{row['cliente_nome']} - {acao}"
+                            if st.button(label, key=f"bg_proc_{row['id']}", use_container_width=True):
+                                st.session_state.processo_id = row['id']
+                                st.session_state.nav_selection = "Processos"
+                                st.rerun()
+                    
+                    # Financeiro
+                    if not resultados['financeiro'].empty:
+                        st.caption("💰 **Financeiro**")
+                        for _, row in resultados['financeiro'].iterrows():
+                            desc = row['descricao'][:20] + "..." if len(str(row['descricao'])) > 20 else row['descricao']
+                            valor = f"R$ {row['valor']:,.2f}" if row['valor'] else ""
+                            st.markdown(f"• {desc} **{valor}**")
+            elif termo_busca:
+                st.caption("🔍 Nenhum resultado encontrado.")
+        
+        st.markdown("---")
+        
         # Definição dos Módulos Disponíveis
+
         all_modules = {
             "Painel Geral": dashboard,
             "Clientes (CRM)": clientes,
@@ -509,7 +605,9 @@ else:
             "💰 Propostas": propostas,
             "🏦 Conciliação Bancária": conciliacao_bancaria,
             "🤖 IA Jurídica": ia_juridica,
+            "📧 Alertas E-mail": alertas_email,
             "Relatórios": relatorios,
+            "📁 Google Drive": drive,
             "📚 Ajuda": ajuda
         }
         
@@ -557,11 +655,23 @@ else:
         # --- COPILOTO IA (SIDEBAR) ---
         with st.expander("🤖 Copiloto IA (Sidebar)", expanded=False):
             render_copilot_chat(st.container(), is_popover=False)
+        
+        # --- CENTRO DE NOTIFICAÇÕES (FASE 3) ---
+        notif_count = int(notifications.contar_nao_lidas(st.session_state.get('username')) or 0)
+        notif_label = f"🔔 Notificações ({notif_count})" if notif_count > 0 else "🔔 Notificações"
+        with st.expander(notif_label, expanded=bool(notif_count > 0)):
+            notifications.render_centro_notificacoes()
 
-        if st.button("Sair / Logout", use_container_width=True):
+        st.markdown("---")
+        
+        # --- TOGGLE DE TEMA (Sprint 4) ---
+        from components.ui import render_theme_toggle
+        render_theme_toggle()
+
+        if st.button("🚪 Sair / Logout", use_container_width=True):
             logout()
             
-        st.caption("v2.6.1 - Segurança bcrypt")
+        st.caption("v4.0.0 - Sprint 4 UX")
 
     # --- ROTEAMENTO COM ESCUDO DE ERROS ---
     if selection in menu_options:

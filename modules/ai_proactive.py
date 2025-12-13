@@ -212,11 +212,186 @@ def generate_insights():
     """
     Gera insights periódicos (background jobs).
     Pode ser chamado por um scheduler ou cron.
+    
+    Varreduras:
+    1. Prazos vencendo (3, 5, 10 dias)
+    2. Processos parados há mais de 30 dias
+    3. Financeiro: Entradas pendentes vencidas (inadimplência)
     """
-    # Exemplo: Verificar processos parados há muito tempo
-    # Exemplo: Verificar clientes sem contato recente
-    logger.info("Gerando insights periódicos (Simulação)...")
-    pass
+    from datetime import datetime, timedelta
+    
+    logger.info("=== Iniciando geração de insights periódicos ===")
+    insights_gerados = 0
+    
+    # ============================================================
+    # 1. VARREDURA DE PRAZOS (Agenda)
+    # ============================================================
+    try:
+        hoje = datetime.now().date()
+        
+        # Prazos em 3, 5 e 10 dias
+        for dias, prioridade in [(3, 'alta'), (5, 'media'), (10, 'baixa')]:
+            data_alvo = (hoje + timedelta(days=dias)).strftime('%Y-%m-%d')
+            
+            prazos = db.sql_get_query("""
+                SELECT a.*, p.numero, p.acao, c.nome as cliente_nome
+                FROM agenda a
+                LEFT JOIN processos p ON a.id_processo = p.id
+                LEFT JOIN clientes c ON p.id_cliente = c.id
+                WHERE a.data_evento = ?
+                AND a.status != 'concluido'
+                AND a.tipo_evento IN ('prazo', 'audiencia')
+            """, (data_alvo,))
+            
+            for _, prazo in prazos.iterrows():
+                # Verificar se já existe insight para este prazo
+                existe = db.sql_get_query(
+                    "SELECT id FROM ai_insights WHERE link_acao LIKE ? AND lido = 0",
+                    (f"%agenda%id={prazo['id']}%",)
+                )
+                
+                if existe.empty:
+                    titulo = f"⏰ Prazo em {dias} dias: {prazo['titulo']}"
+                    descricao = f"""
+Evento: {prazo['titulo']}
+Data: {prazo['data_evento']}
+Tipo: {prazo['tipo_evento']}
+Processo: {prazo.get('numero', 'N/A')} - {prazo.get('acao', 'N/A')}
+Cliente: {prazo.get('cliente_nome', 'N/A')}
+                    """.strip()
+                    
+                    salvar_insight(
+                        titulo=titulo,
+                        descricao=descricao,
+                        prioridade=prioridade,
+                        acao_sugerida="Ver Agenda",
+                        link_acao=f"page=Agenda&id={prazo['id']}"
+                    )
+                    insights_gerados += 1
+                    logger.info(f"Insight gerado: {titulo}")
+                    
+    except Exception as e:
+        logger.error(f"Erro na varredura de prazos: {e}")
+    
+    # ============================================================
+    # 2. PROCESSOS PARADOS (sem andamento há mais de 30 dias)
+    # ============================================================
+    try:
+        data_limite = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+        
+        processos_parados = db.sql_get_query("""
+            SELECT p.id, p.numero, p.acao, p.cliente_nome,
+                   MAX(a.data) as ultimo_andamento
+            FROM processos p
+            LEFT JOIN andamentos a ON p.id = a.id_processo
+            WHERE p.status = 'Ativo'
+            GROUP BY p.id
+            HAVING ultimo_andamento IS NULL OR ultimo_andamento < ?
+            ORDER BY ultimo_andamento ASC
+            LIMIT 10
+        """, (data_limite,))
+        
+        for _, proc in processos_parados.iterrows():
+            # Verificar se já existe insight para este processo
+            existe = db.sql_get_query(
+                "SELECT id FROM ai_insights WHERE link_acao LIKE ? AND lido = 0",
+                (f"%Processos%id={proc['id']}%",)
+            )
+            
+            if existe.empty:
+                ultimo = proc.get('ultimo_andamento', 'Nunca')
+                if ultimo and ultimo != 'Nunca':
+                    try:
+                        data_ultimo = datetime.strptime(str(ultimo)[:10], '%Y-%m-%d')
+                        dias_parado = (datetime.now() - data_ultimo).days
+                    except:
+                        dias_parado = 30
+                else:
+                    dias_parado = "N/A"
+                
+                titulo = f"🔴 Processo parado: {proc['acao']}"
+                descricao = f"""
+Número: {proc['numero']}
+Cliente: {proc['cliente_nome']}
+Último andamento: {ultimo}
+Dias sem movimentação: {dias_parado}
+
+Sugestão: Verificar se há providências pendentes ou despachos a cumprir.
+                """.strip()
+                
+                salvar_insight(
+                    titulo=titulo,
+                    descricao=descricao,
+                    prioridade='alta',
+                    acao_sugerida="Ver Processo",
+                    link_acao=f"page=Processos&id={proc['id']}"
+                )
+                insights_gerados += 1
+                logger.info(f"Insight gerado: {titulo}")
+                
+    except Exception as e:
+        logger.error(f"Erro na varredura de processos parados: {e}")
+    
+    # ============================================================
+    # 3. INADIMPLÊNCIA (Entradas pendentes vencidas)
+    # ============================================================
+    try:
+        hoje_str = datetime.now().strftime('%Y-%m-%d')
+        
+        inadimplentes = db.sql_get_query("""
+            SELECT f.id, f.descricao, f.valor, f.vencimento, 
+                   c.nome as cliente_nome, c.id as cliente_id
+            FROM financeiro f
+            LEFT JOIN clientes c ON f.id_cliente = c.id
+            WHERE f.tipo = 'Entrada'
+            AND f.status_pagamento = 'Pendente'
+            AND f.vencimento < ?
+            ORDER BY f.vencimento ASC
+            LIMIT 15
+        """, (hoje_str,))
+        
+        if not inadimplentes.empty:
+            total_inadimplente = inadimplentes['valor'].sum()
+            
+            # Agrupar por cliente
+            clientes_devedores = inadimplentes.groupby('cliente_nome').agg({
+                'valor': 'sum',
+                'id': 'count'
+            }).reset_index()
+            
+            # Gerar insight geral de inadimplência
+            existe_geral = db.sql_get_query(
+                "SELECT id FROM ai_insights WHERE titulo LIKE '%Inadimplência%' AND lido = 0"
+            )
+            
+            if existe_geral.empty and len(clientes_devedores) > 0:
+                titulo = f"💰 Alerta de Inadimplência: R$ {total_inadimplente:,.2f}"
+                descricao = f"""
+Total em atraso: R$ {total_inadimplente:,.2f}
+Clientes com pendências: {len(clientes_devedores)}
+
+Top devedores:
+"""
+                for _, cli in clientes_devedores.head(5).iterrows():
+                    descricao += f"• {cli['cliente_nome']}: R$ {cli['valor']:,.2f} ({int(cli['id'])} parcelas)\n"
+                
+                descricao += "\nSugestão: Enviar lembretes de cobrança via e-mail ou WhatsApp."
+                
+                salvar_insight(
+                    titulo=titulo,
+                    descricao=descricao.strip(),
+                    prioridade='alta',
+                    acao_sugerida="Ver Financeiro",
+                    link_acao="page=Financeiro"
+                )
+                insights_gerados += 1
+                logger.info(f"Insight gerado: {titulo}")
+                
+    except Exception as e:
+        logger.error(f"Erro na varredura de inadimplência: {e}")
+    
+    logger.info(f"=== Geração concluída: {insights_gerados} insights gerados ===")
+    return insights_gerados
 
 def get_copilot_response(message, context=None):
     """

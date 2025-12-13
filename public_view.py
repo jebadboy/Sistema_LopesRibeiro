@@ -23,9 +23,9 @@ st.markdown("""
     </div>
 """, unsafe_allow_html=True)
 
-# Obter token da URL
+# Obter token da URL (compatível com Streamlit 1.30+)
 query_params = st.query_params
-token = query_params.get("token", [None])[0] if "token" in query_params else None
+token = query_params.get("token", None)
 
 # Se nao houver token na URL, mostrar campo de entrada
 if not token:

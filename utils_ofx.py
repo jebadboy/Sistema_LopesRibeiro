@@ -184,14 +184,18 @@ def verificar_transacao_duplicada(transaction_id):
         bool: True se já existe, False caso contrário
     """
     try:
+        import database_adapter as adapter
         query = "SELECT COUNT(*) as count FROM transacoes_bancarias WHERE transaction_id = ?"
+        if adapter.USE_POSTGRES:
+            query = query.replace('?', '%s')
         result = db.run_query(query, (transaction_id,))
         
         if result and len(result) > 0:
             return result[0].get('count', 0) > 0
         
         return False
-    except:
+    except Exception as e:
+        print(f"Erro ao verificar duplicidade: {e}")
         return False
 
 def salvar_transacao_bancaria(transacao_data):

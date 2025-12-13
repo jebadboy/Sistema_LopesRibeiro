@@ -1,13 +1,20 @@
 """
 Módulo de integração com Google Drive usando Service Account.
 Permite upload de arquivos e gestão de pastas sem intervenção humana.
+
+Features Sprint 3:
+- Refresh automático de token quando expira
+- Tratamento robusto de erros de autenticação
 """
 
 import os
 import logging
+import time
+from functools import wraps
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from googleapiclient.errors import HttpError
 
 # Configuração de Logs
 logging.basicConfig(level=logging.INFO)
@@ -17,11 +24,9 @@ logger = logging.getLogger(__name__)
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 # Caminho do arquivo de credenciais (Service Account)
-# Caminho do arquivo de credenciais (Service Account)
 SERVICE_ACCOUNT_FILE = 'service_account.json'
 
 # ID da pasta alvo no Google Drive (Compartilhada com a Service Account)
-# O usuário deve fornecer este ID.
 PASTA_ALVO_ID = '1wJENklSqCOYbCIoq4MaBiLncVzD1B69R'
 
 try:
@@ -34,15 +39,29 @@ except:
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 
-def autenticar():
+# Cache global do service para reutilização
+_drive_service = None
+_last_auth_time = None
+
+def autenticar(force_refresh: bool = False):
     """
     Autentica usando OAuth (token.json) ou Service Account.
     Prioridade:
     1. Streamlit Secrets (Produção)
-    2. OAuth (Usuário Local)
+    2. OAuth (Usuário Local) - com refresh automático
     3. Service Account File (Fallback Local)
+    
+    Args:
+        force_refresh: Forçar re-autenticação (ignora cache)
     """
+    global _drive_service, _last_auth_time
     import streamlit as st
+    
+    # Reutilizar service se autenticado recentemente (< 45 min)
+    if not force_refresh and _drive_service and _last_auth_time:
+        age_minutes = (time.time() - _last_auth_time) / 60
+        if age_minutes < 45:
+            return _drive_service
     
     # 1. Tentar Streamlit Secrets (Produção)
     if "gcp_service_account" in st.secrets:
@@ -53,6 +72,8 @@ def autenticar():
             )
             service = build('drive', 'v3', credentials=creds)
             logger.info("Autenticado via Streamlit Secrets (Service Account)")
+            _drive_service = service
+            _last_auth_time = time.time()
             return service
         except Exception as e:
             logger.error(f"Erro ao autenticar via Secrets: {e}")
@@ -63,10 +84,20 @@ def autenticar():
     if os.path.exists('token.json'):
         try:
             creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            
+            # Verificar se precisa refresh
             if creds and creds.expired and creds.refresh_token:
+                logger.info("[Drive] Token expirado, fazendo refresh...")
                 creds.refresh(Request())
+                
+                # Salvar token atualizado para próxima vez
+                with open('token.json', 'w') as token_file:
+                    token_file.write(creds.to_json())
+                logger.info("[Drive] Token renovado e salvo com sucesso!")
             
             service = build('drive', 'v3', credentials=creds)
+            _drive_service = service
+            _last_auth_time = time.time()
             return service
         except Exception as e:
             logger.error(f"Erro na autenticação OAuth: {e}")
@@ -82,10 +113,50 @@ def autenticar():
             SERVICE_ACCOUNT_FILE, scopes=SCOPES
         )
         service = build('drive', 'v3', credentials=creds)
+        _drive_service = service
+        _last_auth_time = time.time()
         return service
     except Exception as e:
         logger.error(f"Erro na autenticação do Drive: {e}")
         return None
+
+def retry_on_auth_error(func):
+    """
+    Decorator que re-autentica e tenta novamente em caso de erro 401/403.
+    
+    Uso:
+        @retry_on_auth_error
+        def upload_file(service, ...):
+            ...
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except HttpError as e:
+            if e.resp.status in [401, 403]:
+                logger.warning(f"[Drive] Erro de autenticação ({e.resp.status}), tentando re-autenticar...")
+                
+                # Forçar re-autenticação
+                new_service = autenticar(force_refresh=True)
+                
+                if new_service:
+                    # Substituir o primeiro argumento (service) pelo novo
+                    if args:
+                        args = (new_service,) + args[1:]
+                    return func(*args, **kwargs)
+                else:
+                    logger.error("[Drive] Falha ao re-autenticar!")
+                    raise
+            else:
+                raise
+        except Exception as e:
+            logger.error(f"[Drive] Erro inesperado: {e}")
+            raise
+    
+    return wrapper
+
+
 
 def find_folder(service, folder_name, parent_id=None):
     """

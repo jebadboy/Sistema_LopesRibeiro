@@ -42,22 +42,14 @@ def render_busca_datajud():
                 if not valido:
                     st.error(f"❌ {erro_validacao}")
                 else:
-                    # Buscar token
+                    # Token é opcional - API DataJud usa chave pública oficial
                     token = db.get_config('datajud_token', '')
                     
-                    if not token:
-                        st.error("🔑 Token DataJud não configurado")
-                        st.info("Configure o token em: **Administração** → **Configurações** → **Integração DataJud**")
-                        
-                        if st.button("➡️ Ir para Administração"):
-                            st.session_state.next_nav = "Administração"
-                            st.rerun()
-                    else:
-                        # Identificar tribunal
-                        tribunal, _ = datajud.identificar_tribunal(numero_cnj)
-                        
-                        if tribunal:
-                            st.info(f"🏛️ Tribunal identificado: **{tribunal}**")
+                    # Identificar tribunal
+                    tribunal, _ = datajud.identificar_tribunal(numero_cnj)
+                    
+                    if tribunal:
+                        st.info(f"🏛️ Tribunal identificado: **{tribunal}**")
                         
                         # Buscar processo
                         with st.spinner("🔍 Consultando DataJud..."):
@@ -121,10 +113,23 @@ def render_busca_datajud():
                                 st.write(f"Partes Cache: {len(db.buscar_partes_cache(numero_cnj)) if numero_cnj else 0}")
                                 st.write(f"Partes API: {len(partes)}")
                                 st.write(f"Movimentos: {len(movimentos_disponiveis)}")
-                                if movimentos_disponiveis:
-                                    st.write("Primeiros movimentos:")
-                                    for m in movimentos_disponiveis[:3]:
-                                        st.caption(f"- {m.get('descricao', 'N/A')[:100]}")
+                                
+                                # Mostrar flags encontradas
+                                flags = dados_limpos.get('flags_processo', [])
+                                if flags:
+                                    st.success(f"🏷️ **Flags:** {', '.join(flags)}")
+                                
+                                # Mostrar gatilho financeiro
+                                if dados_limpos.get('gatilho_financeiro'):
+                                    st.warning("💰 **Gatilho Financeiro detectado!**")
+                                
+                                # Mostrar movimentos enriquecidos
+                                mov_enriq = dados_limpos.get('movimentos_enriquecidos', {}).get('movimentos', [])
+                                if mov_enriq:
+                                    st.write("**Primeiros movimentos enriquecidos:**")
+                                    for m in mov_enriq[:5]:
+                                        urgencia_icon = "🔴" if m.get('urgencia') == 'critica' else "🟡" if m.get('urgencia') == 'alta' else "⚪"
+                                        st.caption(f"{urgencia_icon} {m.get('texto_ia', 'N/A')[:100]}")
                             
                             # TENTATIVA 1: Partes já vieram da API parseada
                             if partes:
@@ -183,22 +188,24 @@ def render_busca_datajud():
                                     extrair_textos(dados_processo, textos_para_ia)
                                 
                                 if textos_para_ia:
-                                    with st.spinner("🤖 IA analisando dados para identificar partes..."):
-                                        resultado_ia = ai.extrair_partes_processo(
-                                            textos_para_ia[:20],  # Limitar a 20 textos
-                                            dados_limpos.get('classe', ''),
-                                            dados_limpos.get('orgao_julgador', '')
-                                        )
-                                        
-                                        if resultado_ia.get('partes'):
-                                            partes = resultado_ia['partes']
-                                            st.info(f"🤖 IA identificou {len(partes)} parte(s)")
-                                            if resultado_ia.get('observacao'):
-                                                st.caption(f"Obs: {resultado_ia['observacao']}")
-                                        else:
-                                            st.warning(f"IA não conseguiu identificar partes. {resultado_ia.get('observacao', '')}")
-                                else:
-                                    st.warning("Nenhum texto disponível para análise de IA")
+                                    # MUDANÇA: Só executar se clicar no botão (evita vazamento de cota)
+                                    st.warning("⚠️ DataJud não retornou as partes.")
+                                    if st.button("🕵️‍♂️ Tentar identificar partes com IA (Gasta Cota)", key="btn_ia_partes"):
+                                        with st.spinner("🤖 IA lendo movimentações para achar nomes..."):
+                                            resultado_ia = ai.extrair_partes_processo(
+                                                textos_para_ia[:20],
+                                                dados_limpos.get('classe', ''),
+                                                dados_limpos.get('orgao_julgador', '')
+                                            )
+                                            
+                                            if resultado_ia.get('partes'):
+                                                partes = resultado_ia['partes']
+                                                st.success(f"🤖 IA identificou {len(partes)} parte(s)!")
+                                                st.json(partes)  # Mostra o resultado para conferência
+                                            else:
+                                                st.error("IA não conseguiu identificar as partes.")
+                                    else:
+                                        st.info("💡 Dica: Use o cadastro manual abaixo ou clique no botão acima para usar a IA.")
                             
                             # FALLBACK FINAL: Input manual com UX melhorada
                             if not partes:
@@ -296,8 +303,9 @@ def render_busca_datajud():
                                             'cpf_cnpj': '',
                                             'tipo_pessoa': 'Física'
                                         }
-                            else:
-                                # Partes encontradas - mostrar opções para selecionar
+                            
+                            # Partes encontradas - mostrar opções para selecionar
+                            if partes:
                                 opcoes_partes = []
                                 for i, parte in enumerate(partes):
                                     tipo_icon = "⚖️" if parte['tipo'] == "AUTOR" else "🎯" if parte['tipo'] == "REU" else "📌"
@@ -316,6 +324,7 @@ def render_busca_datajud():
                             st.markdown("---")
                             
                             if parte_selecionada:
+                                st.success(f"✅ Cliente selecionado: **{parte_selecionada['nome']}** ({parte_selecionada['tipo']})")
                                 if st.button("✅ Importar Dados", type="primary", use_container_width=True):
                                     # SALVAR PARTES NO CACHE para futuras consultas
                                     if numero_cnj:
@@ -403,6 +412,10 @@ def render_busca_datajud():
                                         st.success("✅ Dados importados com sucesso!")
                                         st.info("📝 Role para baixo para revisar os dados no formulário e salvar o processo.")
                                         st.balloons()
+                                        
+                                        # Limpar campo CNJ para próxima busca
+                                        if 'datajud_numero' in st.session_state:
+                                            st.session_state['datajud_numero'] = ""
                                         
                                         return dados_importados
     
@@ -510,8 +523,8 @@ def importar_movimentacoes_datajud(processo_id):
         st.error(f"Erro ao importar movimentações: {e}")
         return import_count
     
-    # Limpar dados importados após uso
-    if import_count > 0:
-        del st.session_state['datajud_importado']
+    # NOTA: Não limpar dados aqui - deixar para o módulo processos.py
+    # que já faz a limpeza de forma segura após todo o salvamento
+    # Isso evita perda de dados por expiração de sessão
     
     return import_count

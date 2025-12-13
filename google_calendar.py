@@ -33,9 +33,26 @@ def get_token_file(username):
 
 
 def verificar_autenticacao(username):
-    """Verifica se o usuário está autenticado com Google Calendar."""
+    """Verifica se o usuário está autenticado com Google Calendar.
+    Retorna True se houver token de usuário OU Service Account disponível.
+    """
+    # 1. Verificar token de usuário (OAuth 2.0)
     token_file = get_token_file(username)
-    return os.path.exists(token_file)
+    if os.path.exists(token_file):
+        return True
+    
+    # 2. Verificar se há Service Account disponível (via secrets)
+    try:
+        if "gcp_service_account" in st.secrets:
+            return True
+    except:
+        pass  # Secrets não configurados
+    
+    # 3. Verificar se há arquivo de Service Account local
+    if os.path.exists('service_account.json'):
+        return True
+    
+    return False
 
 
 def autenticar_google(username):
@@ -335,13 +352,18 @@ def importar_eventos_google(service, data_inicio=None, data_fim=None):
             titulo = event.get('summary', 'Sem título')
             descricao = event.get('description', '')
             
-            # Extrair data
+            # Extrair data e hora
             start = event['start'].get('date') or event['start'].get('dateTime', '')
+            hora_evento = None
             if start:
-                if 'T' in start:  # datetime
+                if 'T' in start:  # datetime com hora
                     data_evento = start.split('T')[0]
-                else:  # date
+                    # Extrair hora (formato: 2025-12-10T14:30:00-03:00)
+                    hora_parte = start.split('T')[1]
+                    hora_evento = hora_parte[:5]  # Pega só HH:MM
+                else:  # date (dia inteiro)
                     data_evento = start
+                    hora_evento = None
             else:
                 continue
             
@@ -350,6 +372,7 @@ def importar_eventos_google(service, data_inicio=None, data_fim=None):
                 'titulo': titulo,
                 'descricao': descricao,
                 'data_evento': data_evento,
+                'hora_evento': hora_evento,
                 'tipo': 'tarefa',  # Padrão
                 'status': 'pendente',
                 'prioridade': 'media'

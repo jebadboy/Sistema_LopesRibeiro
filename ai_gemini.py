@@ -39,20 +39,41 @@ class GeminiAI:
 
         import streamlit as st
         
-        # Tentar pegar do banco de dados (Configurações Administrador)
-        try:
-            import database as db
-            db_key = db.get_config('gemini_api_key')
-            if db_key and len(db_key) > 20: # Key válida simples check
-                self.api_key = db_key
-        except Exception:
-            pass
+        # Ordem de prioridade para buscar API key:
+        # 1. Secret Manager (produção)
+        # 2. Banco de dados (configuração admin)
+        # 3. Variável de ambiente (dev local)
+        # 4. Streamlit secrets
         
-        # Se não tiver no banco, tenta variável de ambiente
+        # 1. Tentar Secret Manager primeiro
+        try:
+            import secrets_manager
+            self.api_key = secrets_manager.get_gemini_api_key()
+            logger.info("API Key do Gemini obtida do Secret Manager")
+        except Exception as e:
+            logger.debug(f"Secret Manager não disponível: {e}")
+        
+        # 2. Se não encontrou, tentar banco de dados (Configurações Admin)
+        if not self.api_key:
+            try:
+                import database as db
+                db_key = db.get_config('gemini_api_key')
+                if db_key and len(db_key) > 20:  # Key válida simples check
+                    self.api_key = db_key
+                    logger.info("API Key do Gemini obtida do banco de dados")
+            except Exception:
+                pass
+        
+        # 3. Se não tiver no banco, tentar variável de ambiente
         if not self.api_key:
             self.api_key = os.getenv('GEMINI_API_KEY')
-            if not self.api_key and "GEMINI_API_KEY" in st.secrets:
-                self.api_key = st.secrets["GEMINI_API_KEY"]
+            if self.api_key:
+                logger.info("API Key do Gemini obtida de variável de ambiente")
+        
+        # 4. Fallback para Streamlit secrets
+        if not self.api_key and "GEMINI_API_KEY" in st.secrets:
+            self.api_key = st.secrets["GEMINI_API_KEY"]
+            logger.info("API Key do Gemini obtida de Streamlit secrets")
                 
         if self.api_key:
             try:
@@ -60,12 +81,12 @@ class GeminiAI:
                 # Usando gemini-2.5-flash-lite (Modelo disponível no ambiente)
                 self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
                 self.inicializado = True
-                self._init_db() # Garantir que tabela existe
+                self._init_db()  # Garantir que tabela existe
                 logger.info("Gemini AI inicializado com sucesso (modelo: gemini-2.5-flash-lite)")
             except Exception as e:
                 logger.error(f"Erro ao configurar Gemini: {e}")
         else:
-            logger.error("GEMINI_API_KEY não encontrada (env ou secrets)")
+            logger.error("❌ GEMINI_API_KEY não encontrada em nenhuma fonte (Secret Manager, DB, env, secrets)")
 
     def _init_db(self):
         """Cria tabela de cache se não existir"""
@@ -192,8 +213,27 @@ class GeminiAI:
             if resposta_cache:
                 return resposta_cache
             
-            # Gerar resposta
-            response = self.model.generate_content(prompt)
+            # Gerar resposta com Retry Loop (Tratamento Erro 429)
+            import time
+            max_tentativas = 3
+            tentativa = 0
+            response = None
+            
+            while tentativa < max_tentativas:
+                try:
+                    response = self.model.generate_content(prompt)
+                    break
+                except Exception as e:
+                    tentativa += 1
+                    erro_str = str(e)
+                    
+                    if ("429" in erro_str or "quota" in erro_str.lower()) and tentativa < max_tentativas:
+                        tempo_espera = 10 * tentativa  # Espera progressiva (10s, 20s, 30s)
+                        logger.warning(f"⏳ Chat: Cota atingida (Tentativa {tentativa}/{max_tentativas}). Aguardando {tempo_espera}s...")
+                        time.sleep(tempo_espera)
+                    else:
+                        raise e
+            
             resposta = response.text
             
             # Salvar em cache
@@ -203,8 +243,13 @@ class GeminiAI:
             return resposta
             
         except Exception as e:
+            erro_str = str(e)
             logger.error(f"Erro no chat: {e}")
-            return f"❌ Erro ao processar mensagem: {str(e)}"
+            
+            if "429" in erro_str or "quota" in erro_str.lower():
+                return "⏳ Limite de requisições atingido. Aguarde 1 minuto e tente novamente."
+            
+            return f"❌ Erro ao processar mensagem: {erro_str}"
 
     def analisar_andamento(self, texto_movimentacao: str, contexto_processo: str = "", nome_cliente: str = "") -> Dict:
         """
@@ -246,6 +291,13 @@ class GeminiAI:
             - Se detectar dinheiro na mesa, sinalize com prioridade ALTA
             - Gatilhos: alvará, levantamento, sucumbência, honorários, trânsito em julgado, acordo homologado
             
+            REGRA 4 - TRADUTOR JURÍDICO (EDUCATIVO):
+            - No campo "explicacao_didatica", explique O QUE É aquele ato processual
+            - Defina o termo para um LEIGO de forma clara e simples
+            - Exemplo: Se for "Conclusos para Despacho", a explicação deve ser: "Significa que o processo está na mesa do Juiz para que ele tome uma decisão ou dê uma ordem."
+            - Exemplo: Se for "Juntada de AR", explique: "Significa que o correio devolveu o comprovante confirmando se a pessoa recebeu ou não a carta judicial."
+            - Exemplo: Se for "Citação", explique: "É o ato oficial que avisa a outra parte que existe um processo contra ela e que ela precisa se defender."
+            
             === DADOS PARA ANÁLISE ===
             
             Movimentação: "{texto_movimentacao}"
@@ -259,10 +311,14 @@ class GeminiAI:
                 "urgente": boolean,
                 "acao_requerida": boolean,
                 "resumo": "Resumo técnico curto (1 frase)",
+                "explicacao_didatica": "Definição do termo jurídico em linguagem simples para leigos - O QUE É esse ato processual",
                 "mensagem_cliente": "Mensagem pronta para WhatsApp, humanizada com emojis",
                 "gatilho_financeiro": boolean,
                 "tipo_gatilho": "Tipo: alvará/sucumbência/honorários/levantamento/nenhum",
-                "sugestao_financeira": "Ação financeira sugerida (ex: Lançar recebimento de R$ X) ou null"
+                "sugestao_financeira": "Ação financeira sugerida (ex: Lançar recebimento de R$ X) ou null",
+                "evolucao_processual": "Explicação CONTEXTUALIZADA do que isso significa no andamento geral (ex: 'O processo saiu da fase de conhecimento e iniciou a execução')",
+                "proxima_fase": "Previsão do próximo passo lógico (ex: 'Expedição de mandato', 'Sentença', 'Recurso')",
+                "recomendacao_advogado": "Recomendação explícita para o advogado: 'AGUARDAR' ou 'PETICIONAR' ou 'CONTATAR CLIENTE'"
             }}
             """
             
@@ -276,7 +332,27 @@ class GeminiAI:
                 except:
                      pass # Se cache estiver inválido, gera dnovo
             
-            response = self.model.generate_content(prompt)
+            # Gerar resposta com Retry Loop (Tratamento Erro 429)
+            import time
+            max_tentativas = 3
+            tentativa = 0
+            response = None
+            
+            while tentativa < max_tentativas:
+                try:
+                    response = self.model.generate_content(prompt)
+                    break
+                except Exception as e:
+                    tentativa += 1
+                    erro_str = str(e)
+                    
+                    if ("429" in erro_str or "quota" in erro_str.lower()) and tentativa < max_tentativas:
+                        tempo_espera = 10 * tentativa
+                        logger.warning(f"⏳ Andamento: Cota atingida (Tentativa {tentativa}/{max_tentativas}). Aguardando {tempo_espera}s...")
+                        time.sleep(tempo_espera)
+                    else:
+                        raise e
+            
             texto_resp = response.text.replace("```json", "").replace("```", "").strip()
             
             self._salvar_cache(hash_input, texto_resp)
@@ -297,8 +373,19 @@ class GeminiAI:
             return resultado
             
         except Exception as e:
+            error_str = str(e)
             logger.error(f"Erro ao analisar andamento: {e}")
-            return {"urgente": False, "resumo": f"Erro Técnico: {str(e)}", "erro": str(e)}
+            
+            # Tratamento específico para erro de quota
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                return {
+                    "urgente": False, 
+                    "resumo": "⏳ Limite de requisições atingido. Aguarde 1 minuto e tente novamente.", 
+                    "erro": "quota_exceeded",
+                    "mensagem_usuario": "O limite gratuito da IA foi atingido. Aguarde alguns segundos ou atualize seu plano Google AI."
+                }
+            
+            return {"urgente": False, "resumo": f"Erro Técnico: {error_str}", "erro": error_str}
 
     def extrair_partes_processo(self, movimentos: List[str], classe_processo: str = "", orgao: str = "") -> Dict:
         """
@@ -501,8 +588,307 @@ class GeminiAI:
             return resultado
 
         except Exception as e:
+            error_str = str(e)
             logger.error(f"Erro na análise estratégica: {e}")
-            return {"erro": str(e)}
+            
+            # Tratamento específico para erro de quota
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                return {
+                    "erro": "quota_exceeded",
+                    "probabilidade_exito": "Indisponível",
+                    "justificativa_exito": "Limite de requisições da IA atingido. Aguarde 1 minuto.",
+                    "analise_fase": "Análise temporariamente indisponível",
+                    "proximos_passos_sugeridos": ["Aguarde 1 minuto e tente novamente"],
+                    "riscos_alertas": ["Limite de quota da API Gemini atingido"],
+                    "mensagem_usuario": "⏳ O limite gratuito da IA foi atingido. Aguarde alguns segundos ou atualize seu plano Google AI."
+                }
+            
+            return {"erro": error_str}
+
+    def analisar_processo_completo(self, id_processo: int, dados_processo: Dict, historico_movimentos: List[Dict], force_refresh: bool = False) -> Dict:
+        """
+        OTIMIZAÇÃO DE CONSUMO: Single Shot Prompting
+        
+        Faz UMA ÚNICA chamada à API Gemini retornando TODAS as análises:
+        - Estratégia
+        - Riscos
+        - Oportunidades Financeiras
+        - Próximos Passos
+        - Mensagem para Cliente
+        
+        Cache em banco de dados do sistema (TTL: 24h)
+        Reduz consumo de API em ~80%
+        
+        Args:
+            id_processo: ID do processo no banco
+            dados_processo: Dict com dados do processo
+            historico_movimentos: Lista de movimentos
+            force_refresh: Se True, ignora cache
+            
+        Returns:
+            Dict completo com todas as análises
+        """
+        import database as db_main
+        import json
+        
+        CACHE_TTL_HOURS = 24
+        
+        # 1. VERIFICAR CACHE EM BANCO (não arquivo local)
+        if not force_refresh:
+            try:
+                cache_query = """
+                    SELECT analise_json, data_analise 
+                    FROM ai_analises_cache 
+                    WHERE id_processo = ? 
+                    ORDER BY data_analise DESC 
+                    LIMIT 1
+                """
+                cache_result = db_main.sql_get_query(cache_query, (id_processo,))
+                
+                if not cache_result.empty:
+                    data_cache = cache_result.iloc[0]['data_analise']
+                    # Verificar TTL
+                    try:
+                        data_cache_dt = datetime.fromisoformat(data_cache)
+                        idade_horas = (datetime.now() - data_cache_dt).total_seconds() / 3600
+                        
+                        if idade_horas < CACHE_TTL_HOURS:
+                            resultado = json.loads(cache_result.iloc[0]['analise_json'])
+                            resultado['from_cache'] = True
+                            resultado['cache_age_hours'] = round(idade_horas, 1)
+                            logger.info(f"Análise carregada do cache (idade: {idade_horas:.1f}h)")
+                            return resultado
+                    except:
+                        pass
+            except Exception as e:
+                logger.warning(f"Cache não disponível: {e}")
+        
+        # 2. SE NÃO TEM CACHE VÁLIDO, FAZER CHAMADA ÚNICA
+        if not self.inicializado or not self.model:
+            return {"erro": "IA não inicializada"}
+        
+        try:
+            # Preparar contexto
+            historico_texto = ""
+            for mov in historico_movimentos[:20]:  # Aumentar para 20 movimentos
+                historico_texto += f"- {mov.get('data', '?')}: {mov.get('descricao', '')}\n"
+            
+            # PROMPT ÚNICO (SINGLE SHOT) - Retorna tudo de uma vez
+            prompt = f"""
+            ATUE COMO SÓCIO SÊNIOR DO ESCRITÓRIO LOPES & RIBEIRO.
+            
+            Analise o processo abaixo e retorne UM ÚNICO JSON com TODAS as análises.
+            
+            === DADOS DO PROCESSO ===
+            - Número: {dados_processo.get('numero', 'N/A')}
+            - Ação: {dados_processo.get('acao', 'N/A')}
+            - Cliente: {dados_processo.get('cliente_nome', 'N/A')}
+            - Fase Atual: {dados_processo.get('fase_processual', 'N/A')}
+            - Valor da Causa: R$ {dados_processo.get('valor_causa', 0)}
+            - Assunto: {dados_processo.get('assunto', 'N/A')}
+            
+            === HISTÓRICO DE MOVIMENTAÇÕES ===
+            {historico_texto if historico_texto else "Sem movimentações registradas."}
+            
+            === RETORNE UM ÚNICO JSON NO FORMATO ===
+            {{
+                "resumo_executivo": "Resumo em 2-3 frases do estado atual do processo",
+                
+                "probabilidade_exito": "Alta/Média/Baixa/Incerta",
+                "justificativa_exito": "Explicação de 1 frase",
+                
+                "analise_fase": "Em que fase estamos realmente",
+                
+                "proximos_passos": ["passo 1", "passo 2", "passo 3"],
+                
+                "riscos": ["risco 1", "risco 2"],
+                "urgencia": 1-5,
+                
+                "oportunidade_financeira": true/false,
+                "tipo_oportunidade": "alvara/sucumbencia/honorarios/nenhum",
+                "sugestao_financeira": "Ação sugerida ou null",
+                
+                "mensagem_cliente": "Mensagem curta e amigável para enviar ao cliente por WhatsApp, com emojis",
+                
+                "tom": "Urgente/Normal/Informativo"
+            }}
+            
+            IMPORTANTE: Responda APENAS com o JSON, sem texto adicional.
+            """
+            
+            # Chamar API com Lógica de Retry (Modo Teimoso)
+            max_tentativas = 3
+            tentativa = 0
+            response = None
+            
+            while tentativa < max_tentativas:
+                try:
+                    # Tenta chamar o Google
+                    response = self.model.generate_content(prompt)
+                    break # Se der certo, sai do loop
+                except Exception as e:
+                    tentativa += 1
+                    erro_str = str(e)
+                    
+                    # Se for erro de COTA (429) e ainda tiver tentativas sobrando
+                    if ("429" in erro_str or "quota" in erro_str.lower()) and tentativa < max_tentativas:
+                        tempo_espera = 25 * tentativa # Espera progressiva (25s, 50s...)
+                        logger.warning(f"⏳ Cota atingida (Tentativa {tentativa}/{max_tentativas}). Aguardando {tempo_espera}s...")
+                        import time
+                        time.sleep(tempo_espera)
+                    else:
+                        # Se for outro erro ou se acabaram as tentativas, estoura o erro original
+                        raise e
+            texto_resp = response.text.replace("```json", "").replace("```", "").strip()
+            
+            resultado = json.loads(texto_resp)
+            resultado['from_cache'] = False
+            resultado['data_analise'] = datetime.now().isoformat()
+            
+            # 3. SALVAR NO CACHE DO BANCO
+            try:
+                # Criar tabela se não existir
+                db_main.sql_run("""
+                    CREATE TABLE IF NOT EXISTS ai_analises_cache (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id_processo INTEGER NOT NULL,
+                        analise_json TEXT NOT NULL,
+                        data_analise TEXT NOT NULL,
+                        UNIQUE(id_processo)
+                    )
+                """)
+                
+                # Inserir ou atualizar
+                db_main.sql_run("""
+                    INSERT OR REPLACE INTO ai_analises_cache (id_processo, analise_json, data_analise)
+                    VALUES (?, ?, ?)
+                """, (id_processo, json.dumps(resultado, ensure_ascii=False), datetime.now().isoformat()))
+                
+                logger.info(f"Análise salva no cache para processo {id_processo}")
+            except Exception as e:
+                logger.warning(f"Erro ao salvar cache: {e}")
+            
+            self._request_count += 1  # Conta como 1 requisição apenas!
+            
+            return resultado
+            
+        except Exception as e:
+            error_str = str(e)
+            logger.error(f"Erro na análise completa: {e}")
+            
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                return {
+                    "erro": "quota_exceeded",
+                    "resumo_executivo": "Limite de requisições atingido",
+                    "probabilidade_exito": "Indisponível",
+                    "mensagem_usuario": "⏳ Limite da IA atingido. Aguarde 1 minuto."
+                }
+            
+            return {"erro": error_str}
+
+    def analisar_email_juridico(self, assunto: str, corpo: str, remetente: str = "") -> Dict:
+        """
+        Analisa email de intimação/citação com IA.
+        Extrai prazo, calcula data fatal, classifica urgência.
+        
+        REGRAS DE SEGURANÇA JURÍDICA:
+        - Retorna prazo como SUGESTÃO, não definitivo
+        - Requer confirmação manual do advogado
+        """
+        if not self.inicializado or not self.model:
+            return {"erro": "IA não inicializada", "prazo_identificado": False}
+        
+        try:
+            prompt = f"""
+            VOCÊ É O CONSULTOR JURÍDICO DO ESCRITÓRIO LOPES & RIBEIRO.
+            
+            === TAREFA ===
+            Analise este EMAIL DE TRIBUNAL e extraia informações sobre PRAZOS PROCESSUAIS.
+            
+            === REGRAS DE EXTRAÇÃO ===
+            1. PRAZO: Identifique se há prazo mencionado (ex: "15 dias", "48 horas", "5 dias úteis")
+            2. TIPO DE ATO: Classificar (intimação, citação, alvará, mandado, despacho, sentença)
+            3. URGÊNCIA: Avaliar de 1 a 5 (5 = urgentíssimo)
+            4. Se NÃO encontrar prazo explícito, retorne prazo_dias: null
+            5. NUNCA INVENTE prazos - só extraia o que estiver EXPLÍCITO
+            
+            === EMAIL PARA ANÁLISE ===
+            REMETENTE: {remetente}
+            ASSUNTO: {assunto}
+            CORPO:
+            {corpo[:3000]}
+            
+            === RESPONDA EM JSON ===
+            {{
+                "prazo_identificado": true/false,
+                "prazo_dias": numero ou null,
+                "prazo_tipo": "dias_corridos" ou "dias_uteis" ou "horas" ou null,
+                "tipo_ato": "intimacao/citacao/alvara/mandado/despacho/sentenca/outro",
+                "urgencia": 1-5,
+                "resumo_breve": "Resumo em 1 frase do que o email diz",
+                "acao_sugerida": "O que o advogado deve fazer",
+                "numero_processo": "numero CNJ se identificado ou null",
+                "valor_mencionado": numero ou null,
+                "observacao_ia": "Qualquer observação relevante"
+            }}
+            """
+            
+            hash_input = self._gerar_hash(prompt)
+            resposta_cache = self._buscar_cache(hash_input)
+            
+            if resposta_cache:
+                import json
+                try:
+                    resultado = json.loads(resposta_cache)
+                    resultado["from_cache"] = True
+                    return self._processar_resultado_email(resultado)
+                except:
+                    pass
+            
+            response = self.model.generate_content(prompt)
+            texto_resp = response.text.replace("```json", "").replace("```", "").strip()
+            
+            self._salvar_cache(hash_input, texto_resp)
+            self._request_count += 2
+            
+            import json
+            resultado = json.loads(texto_resp)
+            resultado["from_cache"] = False
+            
+            return self._processar_resultado_email(resultado)
+            
+        except Exception as e:
+            logger.error(f"Erro ao analisar email jurídico: {e}")
+            return {"erro": str(e), "prazo_identificado": False, "resumo_breve": "Erro na análise IA"}
+    
+    def _processar_resultado_email(self, resultado: Dict) -> Dict:
+        """Processa resultado da análise de email e calcula data fatal sugerida."""
+        if resultado.get("prazo_identificado") and resultado.get("prazo_dias"):
+            prazo_dias = int(resultado["prazo_dias"])
+            hoje = datetime.now()
+            
+            if resultado.get("prazo_tipo") == "dias_uteis":
+                dias_corridos = prazo_dias + (prazo_dias // 5) * 2
+                data_fatal = hoje + timedelta(days=dias_corridos)
+            elif resultado.get("prazo_tipo") == "horas":
+                data_fatal = hoje + timedelta(hours=prazo_dias)
+            else:
+                data_fatal = hoje + timedelta(days=prazo_dias)
+            
+            resultado["data_fatal_sugerida"] = data_fatal.strftime("%Y-%m-%d")
+            resultado["data_fatal_formatada"] = data_fatal.strftime("%d/%m/%Y")
+            resultado["dias_restantes"] = prazo_dias
+            resultado["mensagem_usuario"] = (
+                f"⚠️ IA identificou prazo de {prazo_dias} dias. "
+                f"Data fatal sugerida: {resultado['data_fatal_formatada']}. Confere?"
+            )
+        else:
+            resultado["data_fatal_sugerida"] = None
+            resultado["mensagem_usuario"] = "IA não identificou prazo explícito neste email."
+        
+        resultado["status"] = "sugestao_ia"
+        resultado["requer_confirmacao"] = True
+        return resultado
 
 # Instância global
 _gemini_instance = None
@@ -553,3 +939,36 @@ def extrair_partes_processo(movimentos: List[str], classe_processo: str = "", or
     if _gemini_instance is None:
         inicializar_gemini()
     return _gemini_instance.extrair_partes_processo(movimentos, classe_processo, orgao)
+
+def analisar_email_juridico(assunto: str, corpo: str, remetente: str = "") -> Dict:
+    """
+    Wrapper para análise de email de intimação com IA.
+    Extrai prazos, calcula data fatal sugerida.
+    
+    Returns:
+        Dict com prazo_identificado, prazo_dias, data_fatal_sugerida, etc
+    """
+    global _gemini_instance
+    if _gemini_instance is None:
+        inicializar_gemini()
+    return _gemini_instance.analisar_email_juridico(assunto, corpo, remetente)
+
+def analisar_processo_completo(id_processo: int, dados_processo: Dict, historico_movimentos: List[Dict], force_refresh: bool = False) -> Dict:
+    """
+    OTIMIZAÇÃO: Single Shot Prompting com cache em banco.
+    Retorna análise completa do processo (estratégia, riscos, financeiro, mensagem).
+    Reduz consumo de API em ~80%.
+    
+    Args:
+        id_processo: ID do processo
+        dados_processo: Dict com dados do processo
+        historico_movimentos: Lista de movimentos
+        force_refresh: Se True, ignora cache e força nova análise
+        
+    Returns:
+        Dict com todas as análises consolidadas
+    """
+    global _gemini_instance
+    if _gemini_instance is None:
+        inicializar_gemini()
+    return _gemini_instance.analisar_processo_completo(id_processo, dados_processo, historico_movimentos, force_refresh)

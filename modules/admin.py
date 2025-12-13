@@ -29,35 +29,110 @@ def render():
         render_usuarios(is_admin=False)
 
 def render_auditoria():
-    st.markdown("### 📝 Logs de Auditoria")
-    st.caption("Histórico de ações importantes realizadas no sistema.")
+    st.markdown("### 📜 Histórico de Alterações")
+    st.caption("Registro detalhado de todas as modificações realizadas no sistema.")
     
-    # Filtros
-    c1, c2 = st.columns([2, 1])
-    termo = c1.text_input("Filtrar por usuário ou ação", placeholder="Ex: admin, alteração de senha...")
-    limit = c2.number_input("Limite de registros", min_value=10, max_value=500, value=50)
+    # Filtros em colunas
+    col1, col2, col3, col4 = st.columns([2, 1.5, 1.5, 1])
     
-    query = "SELECT timestamp as Data, username as Usuário, action as Ação, details as Detalhes FROM audit_logs"
+    with col1:
+        termo = st.text_input("🔍 Buscar", placeholder="Usuário, tabela, campo...")
+    
+    with col2:
+        tabelas = ["Todas", "clientes", "processos", "financeiro", "agenda", "usuarios"]
+        filtro_tabela = st.selectbox("📁 Tabela", tabelas)
+    
+    with col3:
+        acoes = ["Todas", "UPDATE", "INSERT", "DELETE"]
+        filtro_acao = st.selectbox("⚡ Ação", acoes)
+    
+    with col4:
+        limite = st.number_input("Limite", min_value=20, max_value=500, value=100)
+    
+    # Construir query
+    query = """
+        SELECT 
+            timestamp as Data,
+            username as Usuário,
+            action as Ação,
+            tabela as Tabela,
+            registro_id as ID_Registro,
+            campo as Campo,
+            valor_anterior as Valor_Anterior,
+            valor_novo as Valor_Novo,
+            details as Detalhes
+        FROM audit_logs 
+        WHERE 1=1
+    """
     params = []
     
     if termo:
-        query += " WHERE username LIKE ? OR action LIKE ? OR details LIKE ?"
+        query += " AND (username LIKE ? OR tabela LIKE ? OR campo LIKE ? OR details LIKE ?)"
         term_like = f"%{termo}%"
-        params = [term_like, term_like, term_like]
-        
-    query += f" ORDER BY id DESC LIMIT {limit}"
+        params.extend([term_like, term_like, term_like, term_like])
     
-    df = db.sql_get_query(query, params)
+    if filtro_tabela != "Todas":
+        query += " AND tabela = ?"
+        params.append(filtro_tabela)
+    
+    if filtro_acao != "Todas":
+        query += " AND action = ?"
+        params.append(filtro_acao)
+    
+    query += f" ORDER BY id DESC LIMIT {limite}"
+    
+    df = db.sql_get_query(query, tuple(params) if params else None)
     
     if not df.empty:
-        # Formatar data se possível
+        # Métricas resumo
+        col_m1, col_m2, col_m3 = st.columns(3)
+        col_m1.metric("Total de Registros", len(df))
+        
+        updates = len(df[df['Ação'] == 'UPDATE']) if 'Ação' in df.columns else 0
+        col_m2.metric("Atualizações (UPDATE)", updates)
+        
+        usuarios_unicos = df['Usuário'].nunique() if 'Usuário' in df.columns else 0
+        col_m3.metric("Usuários Diferentes", usuarios_unicos)
+        
+        st.divider()
+        
+        # Formatar data
         try:
-            df['Data'] = pd.to_datetime(df['Data']).dt.strftime('%d/%m/%Y %H:%M:%S')
+            df['Data'] = pd.to_datetime(df['Data']).dt.strftime('%d/%m/%Y %H:%M')
         except:
             pass
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        
+        # Truncar valores longos para visualização
+        for col in ['Valor_Anterior', 'Valor_Novo', 'Detalhes']:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str[:50] + '...'
+        
+        # Exibir com destaque para alterações
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Data": st.column_config.TextColumn("📅 Data", width="small"),
+                "Usuário": st.column_config.TextColumn("👤 Usuário", width="small"),
+                "Ação": st.column_config.TextColumn("⚡ Ação", width="small"),
+                "Tabela": st.column_config.TextColumn("📁 Tabela", width="small"),
+                "ID_Registro": st.column_config.NumberColumn("🔢 ID", width="small"),
+                "Campo": st.column_config.TextColumn("📝 Campo", width="small"),
+                "Valor_Anterior": st.column_config.TextColumn("⬅️ Anterior", width="medium"),
+                "Valor_Novo": st.column_config.TextColumn("➡️ Novo", width="medium"),
+                "Detalhes": st.column_config.TextColumn("ℹ️ Detalhes", width="medium"),
+            }
+        )
+        
+        # Expander com detalhes completos do último registro
+        with st.expander("🔍 Ver Detalhes do Registro Selecionado", expanded=False):
+            st.info("Clique em uma linha na tabela acima para ver detalhes completos (funcionalidade futura)")
+            
     else:
-        st.info("Nenhum registro de auditoria encontrado.")
+        st.info("Nenhum registro de auditoria encontrado com os filtros selecionados.")
+        st.caption("As alterações começarão a ser registradas automaticamente a partir de agora.")
+
 
 def render_configuracoes():
     st.markdown("### 🏢 Dados do Escritório")
@@ -212,6 +287,121 @@ def render_configuracoes():
                     st.success(f"✅ Conexão bem sucedida!")
                 except Exception as e:
                     st.error(f"❌ Falha na conexão: {e}")
+
+    st.divider()
+    
+    # === CONFIGURAÇÃO DE E-MAIL (SMTP) ===
+    st.markdown("### 📧 Configuração de E-mail (SMTP)")
+    st.caption("Configure o servidor de e-mail para envio de notificações automáticas")
+    
+    with st.expander("ℹ️ Como configurar SMTP", expanded=False):
+        st.markdown("""
+        **Exemplos de configuração:**
+        
+        | Provedor | Servidor | Porta |
+        |----------|----------|-------|
+        | Gmail | smtp.gmail.com | 587 (TLS) ou 465 (SSL) |
+        | Outlook | smtp-mail.outlook.com | 587 |
+        | Zoho | smtp.zoho.com | 587 |
+        
+        **Para Gmail:**
+        1. Ative verificação em 2 etapas na sua conta Google
+        2. Crie uma "Senha de App" em: [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+        3. Use essa senha no campo "Senha do E-mail"
+        
+        **Importante:** Não use sua senha normal do e-mail!
+        """)
+    
+    # Status atual
+    smtp_atual = db.get_config('smtp_server', '')
+    email_atual = db.get_config('smtp_email', '')
+    
+    if smtp_atual and email_atual:
+        st.success(f"✅ SMTP configurado: {email_atual} via {smtp_atual}")
+    else:
+        st.warning("⚠️ SMTP não configurado - E-mails não serão enviados")
+    
+    with st.form("config_smtp"):
+        col1, col2 = st.columns(2)
+        
+        smtp_server = col1.text_input(
+            "Servidor SMTP",
+            value=db.get_config('smtp_server', ''),
+            placeholder="smtp.gmail.com"
+        )
+        
+        smtp_port = col2.text_input(
+            "Porta",
+            value=db.get_config('smtp_port', '587'),
+            placeholder="587"
+        )
+        
+        col3, col4 = st.columns(2)
+        
+        smtp_email = col3.text_input(
+            "E-mail de Envio",
+            value=db.get_config('smtp_email', ''),
+            placeholder="escritorio@gmail.com"
+        )
+        
+        smtp_password = col4.text_input(
+            "Senha do E-mail",
+            value=db.get_config('smtp_password', ''),
+            type="password",
+            placeholder="Senha ou Senha de App"
+        )
+        
+        col_save_smtp, col_test_smtp = st.columns(2)
+        
+        if col_save_smtp.form_submit_button("💾 Salvar Configurações SMTP", type="primary", use_container_width=True):
+            if not all([smtp_server, smtp_port, smtp_email, smtp_password]):
+                st.error("❌ Preencha todos os campos")
+            else:
+                db.set_config('smtp_server', smtp_server.strip())
+                db.set_config('smtp_port', smtp_port.strip())
+                db.set_config('smtp_email', smtp_email.strip())
+                db.set_config('smtp_password', smtp_password.strip())
+                db.audit("config_update", "Atualizou configurações SMTP")
+                st.success("✅ Configurações SMTP salvas!")
+                st.rerun()
+        
+        if col_test_smtp.form_submit_button("🧪 Testar Envio", use_container_width=True):
+            if not all([smtp_server, smtp_port, smtp_email, smtp_password]):
+                st.error("❌ Configure todos os campos primeiro")
+            else:
+                with st.spinner("Enviando e-mail de teste..."):
+                    try:
+                        # Salvar temporariamente as configurações para teste
+                        db.set_config('smtp_server', smtp_server.strip())
+                        db.set_config('smtp_port', smtp_port.strip())
+                        db.set_config('smtp_email', smtp_email.strip())
+                        db.set_config('smtp_password', smtp_password.strip())
+                        
+                        import utils_email
+                        
+                        corpo_teste = f"""
+                        <div style="font-family: Arial, sans-serif; padding: 20px; background-color: #f0fdf4; border-radius: 8px;">
+                            <h2 style="color: #166534;">✅ Teste de E-mail Bem Sucedido!</h2>
+                            <p>Este e-mail confirma que as configurações SMTP estão funcionando corretamente.</p>
+                            <p><strong>Sistema:</strong> Lopes & Ribeiro - Sistema Jurídico</p>
+                            <p><strong>Data/Hora:</strong> {time.strftime('%d/%m/%Y %H:%M:%S')}</p>
+                        </div>
+                        """
+                        
+                        sucesso, erro = utils_email.enviar_email(
+                            smtp_email,  # Enviar para o próprio e-mail
+                            "Teste de Configuração SMTP - Sistema Jurídico",
+                            corpo_teste
+                        )
+                        
+                        if sucesso:
+                            st.success(f"✅ E-mail de teste enviado para {smtp_email}!")
+                        else:
+                            st.error(f"❌ Erro ao enviar: {erro}")
+                            
+                    except Exception as e:
+                        st.error(f"❌ Erro: {e}")
+
 
 def render_usuarios(is_admin):
     st.markdown("### 👤 Gestão de Usuários")

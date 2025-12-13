@@ -148,6 +148,42 @@ def validar_cnpj(cnpj):
     d2 = 0 if resto2 < 2 else 11 - resto2
     return d2 == int(cnpj[13])
 
+def mask_sensitive_data(text):
+    """Mascara CPF, CNPJ e outros dados sensíveis em texto para conformidade LGPD."""
+    if not text:
+        return text
+    
+    text = str(text)
+    
+    # Mascarar CPF (123.456.789-01 -> ***.***.***-01)
+    text = re.sub(r'\d{3}\.\d{3}\.\d{3}-(\d{2})', r'***.***.***-\1', text)
+    
+    # Mascarar CPF sem formatação (12345678901 -> ***********01)
+    text = re.sub(r'(?<!\d)\d{9}(\d{2})(?!\d)', r'*********\1', text)
+    
+    # Mascarar CNPJ (12.345.678/0001-90 -> **.***.***/****-90)
+    text = re.sub(r'\d{2}\.\d{3}\.\d{3}/\d{4}-(\d{2})', r'**.***.***/****-\1', text)
+    
+    # Mascarar CNPJ sem formatação
+    text = re.sub(r'(?<!\d)\d{12}(\d{2})(?!\d)', r'************\1', text)
+    
+    # Mascarar nomes (deixa apenas primeira e última letra)
+    # Exemplo: "João Silva Santos" -> "J*** S**** S*****"
+    def mask_name(match):
+        words = match.group(0).split()
+        masked = []
+        for word in words:
+            if len(word) > 2:
+                masked.append(word[0] + '*' * (len(word) - 1))
+            else:
+                masked.append(word)
+        return ' '.join(masked)
+    
+    # Mascarar sequências de palavras capitalizadas (possíveis nomes)
+    text = re.sub(r'(?:[A-ZÇÁÉÍÓÚÂÊÔÃÕ][a-zçáéíóúâêôãõ]+\s+){1,3}[A-ZÇÁÉÍÓÚÂÊÔÃÕ][a-zçáéíóúâêôãõ]+', mask_name, text)
+    
+    return text
+
 def validar_email(email):
     """Valida formato de email."""
     if not email:
